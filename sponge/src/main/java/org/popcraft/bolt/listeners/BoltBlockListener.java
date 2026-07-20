@@ -2,6 +2,7 @@ package org.popcraft.bolt.listeners;
 
 import org.popcraft.bolt.BoltPlugin;
 import org.popcraft.bolt.lang.Translation;
+import org.popcraft.bolt.matcher.Matchers;
 import org.popcraft.bolt.protection.BlockProtection;
 import org.popcraft.bolt.protection.Protection;
 import org.popcraft.bolt.util.BoltComponents;
@@ -71,6 +72,15 @@ public class BoltBlockListener {
         }
         if (interactionHandler.triggerBlock(player, location.get())) {
             event.setCancelled(true);
+            return;
+        }
+        // Deny the break attempt up front (left-click / dig start), while the block is still
+        // present so double-chest matching against the live world works reliably.
+        final Protection protection = plugin.findProtection(location.get());
+        if (protection != null && !plugin.canAccess(protection, player, Permission.DESTROY)) {
+            event.setCancelled(true);
+            BoltComponents.sendMessage(player, Translation.LOCKED, plugin.isUseActionBar(),
+                    Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)));
         }
     }
 
@@ -78,12 +88,18 @@ public class BoltBlockListener {
     public void onBreak(final ChangeBlockEvent.Break event) {
         final Optional<Player> player = event.getCause().first(Player.class);
         for (final Transaction<BlockSnapshot> transaction : event.getTransactions()) {
-            final Optional<Location<World>> location = transaction.getOriginal().getLocation();
+            final BlockSnapshot original = transaction.getOriginal();
+            final Optional<Location<World>> location = original.getLocation();
             if (!location.isPresent()) {
                 continue;
             }
-            final Protection exact = plugin.loadProtection(location.get());
-            final Protection protection = exact != null ? exact : plugin.findProtection(location.get());
+            // Use the transaction's ORIGINAL block type: mid-break the live world may already read
+            // as air, which would defeat live-world-based double-chest matching.
+            final Optional<Location<World>> partner = Matchers.chestPartner(location.get(), original.getState().getType());
+            final BlockProtection exact = plugin.loadProtection(location.get());
+            final Protection protection = exact != null
+                    ? exact
+                    : partner.map(partnerLocation -> plugin.loadProtection(partnerLocation)).orElse(null);
             if (protection == null) {
                 continue;
             }
@@ -95,7 +111,22 @@ public class BoltBlockListener {
                             Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)));
                 }
             } else if (exact != null) {
-                plugin.removeProtection(exact);
+                if (partner.isPresent()) {
+                    // Double chest: migrate the protection to the surviving half instead of removing
+                    // it (matches Bukkit's behavior), silently.
+                    final Location<World> target = partner.get();
+                    exact.setX(target.getBlockX());
+                    exact.setY(target.getBlockY());
+                    exact.setZ(target.getBlockZ());
+                    plugin.saveProtection(exact);
+                } else {
+                    plugin.removeProtection(exact);
+                    if (player.isPresent()) {
+                        BoltComponents.sendMessage(player.get(), Translation.CLICK_UNLOCKED, plugin.isUseActionBar(),
+                                Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, Protections.protectionType(exact)),
+                                Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(exact)));
+                    }
+                }
             }
         }
     }
