@@ -40,7 +40,7 @@ public final class BoltCommands {
     private BoltCommands() {
     }
 
-    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "password"};
+    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "password", "admin"};
 
     private interface Handler {
         void handle(BoltPlugin plugin, CommandSource source, Arguments arguments);
@@ -86,6 +86,9 @@ public final class BoltCommands {
                 break;
             case "password":
                 password(plugin, source, arguments);
+                break;
+            case "admin":
+                AdminCommands.handle(plugin, source, arguments);
                 break;
             default:
                 BoltComponents.sendMessage(source, Translation.COMMAND_INVALID);
@@ -349,7 +352,7 @@ public final class BoltCommands {
         return names;
     }
 
-    private static UUID resolvePlayer(final String name) {
+    static UUID resolvePlayer(final String name) {
         final Optional<Player> online = Sponge.getServer().getPlayer(name);
         if (online.isPresent()) {
             return online.get().getUniqueId();
