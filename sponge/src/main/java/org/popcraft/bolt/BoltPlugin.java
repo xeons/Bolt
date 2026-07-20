@@ -6,12 +6,10 @@ import ninja.leaping.configurate.loader.ConfigurationLoader;
 import org.slf4j.Logger;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.block.BlockType;
-import org.spongepowered.api.block.BlockTypes;
 import org.spongepowered.api.config.ConfigDir;
 import org.spongepowered.api.config.DefaultConfig;
 import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.EntityType;
-import org.spongepowered.api.entity.EntityTypes;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.game.state.GameInitializationEvent;
@@ -52,6 +50,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -59,6 +58,23 @@ import java.util.UUID;
 public class BoltPlugin {
     private static final Source ADMIN_PERMISSION_SOURCE = Source.of(SourceTypes.PERMISSION, "bolt.admin");
     private static final Source MOD_PERMISSION_SOURCE = Source.of(SourceTypes.PERMISSION, "bolt.mod");
+
+    // Default protectable catalog ids (Minecraft 1.12.2), written to the config if absent. Users
+    // can add/remove entries and set autoProtect per block/entity.
+    private static final String[] DEFAULT_CONTAINER_BLOCKS = {
+            "minecraft:chest", "minecraft:trapped_chest", "minecraft:furnace", "minecraft:lit_furnace",
+            "minecraft:dispenser", "minecraft:dropper", "minecraft:hopper", "minecraft:brewing_stand",
+            "minecraft:beacon"
+    };
+    private static final String[] DEFAULT_LOCKABLE_BLOCKS = {
+            "minecraft:wooden_door", "minecraft:spruce_door", "minecraft:birch_door", "minecraft:jungle_door",
+            "minecraft:acacia_door", "minecraft:dark_oak_door", "minecraft:iron_door", "minecraft:trapdoor",
+            "minecraft:iron_trapdoor", "minecraft:standing_sign", "minecraft:wall_sign"
+    };
+    private static final String[] DEFAULT_PRIVATE_ENTITIES = {
+            "minecraft:item_frame", "minecraft:armor_stand", "minecraft:painting", "minecraft:chest_minecart",
+            "minecraft:hopper_minecart", "minecraft:furnace_minecart", "minecraft:leash_knot"
+    };
 
     @Inject
     private Logger logger;
@@ -83,10 +99,13 @@ public class BoltPlugin {
 
     @Listener
     public void onInitialization(final GameInitializationEvent event) {
-        this.bolt = new Bolt(createStore());
+        final CommentedConfigurationNode root = loadConfig();
+        applySettings(root);
+        this.bolt = new Bolt(createStore(root));
         loadTranslations();
-        registerTypes();
-        registerProtectables();
+        registerTypes(root);
+        registerProtectables(root);
+        saveConfig(root);
         Sponge.getEventManager().registerListeners(this, new BoltBlockListener(this));
         Sponge.getEventManager().registerListeners(this, new BoltEntityListener(this));
         Sponge.getEventManager().registerListeners(this, new BoltPlayerListener(this));
@@ -103,17 +122,24 @@ public class BoltPlugin {
         }
     }
 
-    private Store createStore() {
-        CommentedConfigurationNode root = null;
+    private CommentedConfigurationNode loadConfig() {
         try {
-            root = configLoader.load();
+            return configLoader.load();
         } catch (IOException e) {
             logger.warn("Failed to load config, using defaults: " + e.getMessage());
+            return configLoader.createEmptyNode();
         }
-        if (root == null) {
-            logger.info("Bolt storage: in-memory (non-persistent) — config unavailable.");
-            return new MemoryStore();
+    }
+
+    private void saveConfig(final CommentedConfigurationNode root) {
+        try {
+            configLoader.save(root);
+        } catch (IOException e) {
+            logger.warn("Failed to save config: " + e.getMessage());
         }
+    }
+
+    private void applySettings(final CommentedConfigurationNode root) {
         final CommentedConfigurationNode settings = root.getNode("settings");
         useActionBar = settings.getNode("use-action-bar").getBoolean(false);
         settings.getNode("use-action-bar").setValue(useActionBar);
@@ -128,7 +154,9 @@ public class BoltPlugin {
             settings.getNode("password-salt").setValue(salt);
         }
         Source.setPasswordSalt(salt);
+    }
 
+    private Store createStore(final CommentedConfigurationNode root) {
         final CommentedConfigurationNode database = root.getNode("database");
         final String type = database.getNode("type").getString("sqlite").toLowerCase();
         final String defaultPath = configDir.resolve("bolt.db").toString();
@@ -146,11 +174,6 @@ public class BoltPlugin {
         database.getNode("username").setValue(username);
         database.getNode("password").setValue(password);
         database.getNode("prefix").setValue(prefix);
-        try {
-            configLoader.save(root);
-        } catch (IOException e) {
-            logger.warn("Failed to save config: " + e.getMessage());
-        }
 
         if ("none".equals(type) || "memory".equals(type)) {
             logger.info("Bolt storage: in-memory (non-persistent).");
@@ -160,6 +183,16 @@ public class BoltPlugin {
         this.sqlStore = new SQLStore(configuration);
         logger.info("Bolt storage: " + type + (("sqlite".equals(type)) ? " (" + path + ")" : " (" + hostname + "/" + db + ")"));
         return new SimpleProtectionCache(sqlStore);
+    }
+
+    /** Reloads config-driven settings, types, protectables, and translations (used by the admin reload command). */
+    public void reload() {
+        final CommentedConfigurationNode root = loadConfig();
+        applySettings(root);
+        registerTypes(root);
+        registerProtectables(root);
+        loadTranslations();
+        saveConfig(root);
     }
 
     private void loadTranslations() {
@@ -175,48 +208,116 @@ public class BoltPlugin {
         }
     }
 
-    private void registerTypes() {
+    private void registerTypes(final CommentedConfigurationNode root) {
         final AccessRegistry accessRegistry = bolt.getAccessRegistry();
         accessRegistry.unregisterAll();
-        accessRegistry.registerProtectionType("private", false, new HashSet<>(DefaultAccess.PRIVATE));
-        accessRegistry.registerProtectionType("display", false, new HashSet<>(DefaultAccess.DISPLAY));
-        accessRegistry.registerProtectionType("deposit", false, new HashSet<>(DefaultAccess.DEPOSIT));
-        accessRegistry.registerProtectionType("withdrawal", false, new HashSet<>(DefaultAccess.WITHDRAWAL));
-        accessRegistry.registerProtectionType("public", false, new HashSet<>(DefaultAccess.PUBLIC));
-        accessRegistry.registerAccessType("normal", false, new HashSet<>(DefaultAccess.NORMAL));
-        accessRegistry.registerAccessType("admin", true, new HashSet<>(DefaultAccess.ADMIN));
+
+        final CommentedConfigurationNode protections = root.getNode("protections");
+        if (protections.isVirtual() || protections.getChildrenMap().isEmpty()) {
+            writeAccessType(protections, "private", true, false, "redstone");
+            writeAccessType(protections, "display", false, false, "redstone", "interact", "open");
+            writeAccessType(protections, "deposit", false, false, "redstone", "interact", "open", "deposit");
+            writeAccessType(protections, "withdrawal", false, false, "redstone", "interact", "open", "withdraw");
+            writeAccessType(protections, "public", false, false, "redstone", "interact", "open", "deposit", "withdraw", "mount");
+        }
+        for (final Map.Entry<Object, ? extends CommentedConfigurationNode> entry : protections.getChildrenMap().entrySet()) {
+            final String type = entry.getKey().toString().toLowerCase();
+            final CommentedConfigurationNode node = entry.getValue();
+            accessRegistry.registerProtectionType(type, node.getNode("require-permission").getBoolean(false),
+                    new HashSet<>(node.getNode("allows").getList(Object::toString)));
+            if (node.getNode("default").getBoolean(false)) {
+                defaultProtectionType = type;
+            }
+        }
+
+        final CommentedConfigurationNode access = root.getNode("access");
+        if (access.isVirtual() || access.getChildrenMap().isEmpty()) {
+            writeAccessType(access, "normal", true, false, "redstone", "interact", "open", "deposit", "withdraw", "mount");
+            writeAccessType(access, "admin", false, true, "redstone", "interact", "open", "deposit", "withdraw", "mount", "edit");
+        }
+        for (final Map.Entry<Object, ? extends CommentedConfigurationNode> entry : access.getChildrenMap().entrySet()) {
+            final String type = entry.getKey().toString().toLowerCase();
+            final CommentedConfigurationNode node = entry.getValue();
+            accessRegistry.registerAccessType(type, node.getNode("require-permission").getBoolean(false),
+                    new HashSet<>(node.getNode("allows").getList(Object::toString)));
+            if (node.getNode("default").getBoolean(false)) {
+                defaultAccessType = type;
+            }
+        }
+
+        final CommentedConfigurationNode sources = root.getNode("sources");
+        if (sources.isVirtual() || sources.getChildrenMap().isEmpty()) {
+            sources.getNode("player", "require-permission").setValue(false);
+            sources.getNode("group", "require-permission").setValue(false);
+            sources.getNode("password", "require-permission").setValue(false);
+            sources.getNode("permission", "require-permission").setValue(true);
+        }
         bolt.getSourceTypeRegistry().unregisterAll();
-        bolt.getSourceTypeRegistry().registerSourceType(SourceTypes.PLAYER, false, false);
-        bolt.getSourceTypeRegistry().registerSourceType(SourceTypes.PASSWORD, false, false);
-        bolt.getSourceTypeRegistry().registerSourceType(SourceTypes.GROUP, false, false);
-        bolt.getSourceTypeRegistry().registerSourceType(SourceTypes.PERMISSION, true, false);
+        for (final Map.Entry<Object, ? extends CommentedConfigurationNode> entry : sources.getChildrenMap().entrySet()) {
+            final String name = entry.getKey().toString().toLowerCase();
+            final CommentedConfigurationNode node = entry.getValue();
+            bolt.getSourceTypeRegistry().registerSourceType(name,
+                    node.getNode("require-permission").getBoolean(false),
+                    node.getNode("unique").getBoolean(false));
+        }
     }
 
-    private void registerProtectables() {
+    private void writeAccessType(final CommentedConfigurationNode section, final String type, final boolean isDefault,
+                                 final boolean requirePermission, final String... allows) {
+        if (isDefault) {
+            section.getNode(type, "default").setValue(true);
+        }
+        section.getNode(type, "require-permission").setValue(requirePermission);
+        section.getNode(type, "allows").setValue(Arrays.asList(allows));
+    }
+
+    private void registerProtectables(final CommentedConfigurationNode root) {
         protectableBlocks.clear();
         protectableEntities.clear();
-        // Auto-protected containers.
-        for (final BlockType type : Arrays.asList(BlockTypes.CHEST, BlockTypes.TRAPPED_CHEST, BlockTypes.FURNACE,
-                BlockTypes.LIT_FURNACE, BlockTypes.DISPENSER, BlockTypes.DROPPER, BlockTypes.HOPPER,
-                BlockTypes.BREWING_STAND, BlockTypes.BEACON)) {
-            protectableBlocks.put(type, protectable("private"));
+
+        final CommentedConfigurationNode blocks = root.getNode("blocks");
+        if (blocks.isVirtual() || blocks.getChildrenMap().isEmpty()) {
+            for (final String id : DEFAULT_CONTAINER_BLOCKS) {
+                blocks.getNode(id, "autoProtect").setValue("private");
+            }
+            blocks.getNode("minecraft:ender_chest", "autoProtect").setValue("public");
+            for (final String id : DEFAULT_LOCKABLE_BLOCKS) {
+                blocks.getNode(id, "autoProtect").setValue("false");
+            }
         }
-        protectableBlocks.put(BlockTypes.ENDER_CHEST, protectable("public"));
-        // Lockable but not auto-protected (doors).
-        for (final BlockType type : Arrays.asList(BlockTypes.WOODEN_DOOR, BlockTypes.SPRUCE_DOOR, BlockTypes.BIRCH_DOOR,
-                BlockTypes.JUNGLE_DOOR, BlockTypes.ACACIA_DOOR, BlockTypes.DARK_OAK_DOOR, BlockTypes.IRON_DOOR,
-                BlockTypes.TRAPDOOR, BlockTypes.IRON_TRAPDOOR)) {
-            protectableBlocks.put(type, protectable("false"));
+        for (final Map.Entry<Object, ? extends CommentedConfigurationNode> entry : blocks.getChildrenMap().entrySet()) {
+            final String id = entry.getKey().toString();
+            final Optional<BlockType> blockType = Sponge.getRegistry().getType(BlockType.class, id);
+            if (!blockType.isPresent()) {
+                logger.warn("Unknown block in config, skipping: " + id);
+                continue;
+            }
+            protectableBlocks.put(blockType.get(), protectableConfig(entry.getValue()));
         }
-        // Auto-protected entities.
-        for (final EntityType type : Arrays.asList(EntityTypes.ITEM_FRAME, EntityTypes.ARMOR_STAND, EntityTypes.PAINTING)) {
-            protectableEntities.put(type, protectable("private"));
+
+        final CommentedConfigurationNode entities = root.getNode("entities");
+        if (entities.isVirtual() || entities.getChildrenMap().isEmpty()) {
+            for (final String id : DEFAULT_PRIVATE_ENTITIES) {
+                entities.getNode(id, "autoProtect").setValue("private");
+            }
+        }
+        for (final Map.Entry<Object, ? extends CommentedConfigurationNode> entry : entities.getChildrenMap().entrySet()) {
+            final String id = entry.getKey().toString();
+            final Optional<EntityType> entityType = Sponge.getRegistry().getType(EntityType.class, id);
+            if (!entityType.isPresent()) {
+                logger.warn("Unknown entity in config, skipping: " + id);
+                continue;
+            }
+            protectableEntities.put(entityType.get(), protectableConfig(entry.getValue()));
         }
     }
 
-    private ProtectableConfig protectable(final String autoProtectType) {
-        final Access defaultAccess = bolt.getAccessRegistry().getProtectionByType(autoProtectType).orElse(null);
-        return new ProtectableConfig(defaultAccess, false, false);
+    private ProtectableConfig protectableConfig(final CommentedConfigurationNode node) {
+        final String autoProtect = node.getNode("autoProtect").getString("false");
+        final boolean lockPermission = node.getNode("lockPermission").getBoolean(false);
+        final boolean autoProtectPermission = node.getNode("autoProtectPermission").getBoolean(false);
+        final Access defaultAccess = bolt.getAccessRegistry().getProtectionByType(autoProtect).orElse(null);
+        return new ProtectableConfig(defaultAccess, lockPermission, autoProtectPermission);
     }
 
     public Bolt getBolt() {
