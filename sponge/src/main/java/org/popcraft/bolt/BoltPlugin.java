@@ -101,6 +101,7 @@ public class BoltPlugin {
     private boolean useActionBar = false;
     private String language = "en";
     private boolean perPlayerLocale = true;
+    private final Set<Mode> defaultModes = new HashSet<>();
     private Bolt bolt;
     private SQLStore sqlStore;
 
@@ -161,6 +162,18 @@ public class BoltPlugin {
             settings.getNode("password-salt").setValue(salt);
         }
         Source.setPasswordSalt(salt);
+
+        // Modes applied to players who haven't explicitly set them (e.g. ["nospam"]).
+        defaultModes.clear();
+        final List<String> modeNames = settings.getNode("default-modes").getList(Object::toString);
+        for (final String modeName : modeNames) {
+            try {
+                defaultModes.add(Mode.valueOf(modeName.toUpperCase()));
+            } catch (IllegalArgumentException e) {
+                logger.warn("Invalid default mode in config, skipping: " + modeName);
+            }
+        }
+        settings.getNode("default-modes").setValue(modeNames);
     }
 
     private Store createStore(final CommentedConfigurationNode root) {
@@ -373,21 +386,25 @@ public class BoltPlugin {
         }
     }
 
-    /** Restores a player's persisted modes onto their {@link BoltPlayer} (called on join). */
+    /**
+     * Restores a player's persisted modes onto their {@link BoltPlayer} (called on join). A mode
+     * the player has not explicitly set falls back to whether it is a configured default mode, so
+     * server-wide default modes apply to players who never toggled them.
+     */
     public void loadPlayerModes(final UUID uuid, final BoltPlayer boltPlayer) {
         final Path file = configDir.resolve("players").resolve(uuid + ".properties");
-        if (!Files.exists(file)) {
-            return;
-        }
         final Properties properties = new Properties();
-        try (BufferedReader reader = Files.newBufferedReader(file)) {
-            properties.load(reader);
-        } catch (IOException e) {
-            logger.warn("Failed to load player modes: " + e.getMessage());
-            return;
+        if (Files.exists(file)) {
+            try (BufferedReader reader = Files.newBufferedReader(file)) {
+                properties.load(reader);
+            } catch (IOException e) {
+                logger.warn("Failed to load player modes: " + e.getMessage());
+            }
         }
         for (final Mode mode : Mode.values()) {
-            if (Boolean.parseBoolean(properties.getProperty(mode.name().toLowerCase(), "false")) && !boltPlayer.hasMode(mode)) {
+            final String stored = properties.getProperty(mode.name().toLowerCase());
+            final boolean enabled = stored != null ? Boolean.parseBoolean(stored) : defaultModes.contains(mode);
+            if (enabled && !boltPlayer.hasMode(mode)) {
                 boltPlayer.toggleMode(mode);
             }
         }
