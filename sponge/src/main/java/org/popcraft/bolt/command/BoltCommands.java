@@ -2,6 +2,7 @@ package org.popcraft.bolt.command;
 
 import org.popcraft.bolt.BoltPlugin;
 import org.popcraft.bolt.access.Access;
+import org.popcraft.bolt.access.AccessList;
 import org.popcraft.bolt.lang.Translation;
 import org.popcraft.bolt.source.Source;
 import org.popcraft.bolt.source.SourceType;
@@ -10,6 +11,7 @@ import org.popcraft.bolt.util.Action;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.BoltPlayer;
 import org.popcraft.bolt.util.Placeholder;
+import org.popcraft.bolt.util.Protections;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.command.CommandCallable;
 import org.spongepowered.api.command.CommandManager;
@@ -24,10 +26,13 @@ import org.spongepowered.api.world.World;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -40,7 +45,7 @@ public final class BoltCommands {
     private BoltCommands() {
     }
 
-    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "password", "admin"};
+    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "edit", "modify", "password", "admin"};
 
     private interface Handler {
         void handle(BoltPlugin plugin, CommandSource source, Arguments arguments);
@@ -84,6 +89,12 @@ public final class BoltCommands {
             case "trust":
                 trust(plugin, source, arguments);
                 break;
+            case "edit":
+                edit(plugin, source, arguments);
+                break;
+            case "modify":
+                modify(plugin, source, arguments);
+                break;
             case "password":
                 password(plugin, source, arguments);
                 break;
@@ -115,7 +126,9 @@ public final class BoltCommands {
             BoltComponents.sendMessage(source, Translation.CLICK_LOCKED_NO_PERMISSION);
             return;
         }
-        boltPlayer.setAction(new Action(Action.Type.LOCK, "bolt.command.lock", type, false));
+        // "/lock <type> force" lets an admin lock non-protectable blocks (marks the action admin).
+        final boolean force = "force".equalsIgnoreCase(arguments.next()) && source.hasPermission("bolt.admin");
+        boltPlayer.setAction(new Action(Action.Type.LOCK, "bolt.command.lock", type, force));
         BoltComponents.sendMessage(player, Translation.CLICK_ACTION, plugin.isUseActionBar(),
                 Placeholder.of(Translation.Placeholder.ACTION, BoltComponents.translateRaw(Translation.LOCK, player)));
     }
@@ -142,9 +155,9 @@ public final class BoltCommands {
     }
 
     /**
-     * {@code /bolt trust <sourceType> <identifier> [accessType]} — stages a source→access
-     * modification and sets an EDIT action; the next click applies it to that protection. Supports
-     * player, password, and group source types.
+     * {@code /bolt trust [add|remove <sourceType> <identifier> [accessType]]} — edits the sender's
+     * global access list (applies to all of their protections). With no add/remove, lists the
+     * sender's access list. Matches Bukkit's TrustCommand.
      */
     private static void trust(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
         if (!(source instanceof Player)) {
@@ -152,18 +165,129 @@ public final class BoltCommands {
             return;
         }
         final Player player = (Player) source;
-        final String sourceTypeArg = arguments.next();
-        if (sourceTypeArg == null) {
-            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_TRUST,
-                    Placeholder.of(Translation.Placeholder.COMMAND, "/bolt trust"),
-                    Placeholder.of(Translation.Placeholder.LITERAL, "<sourceType> <identifier>"));
+        final String action = arguments.next();
+        if ("add".equalsIgnoreCase(action) || "remove".equalsIgnoreCase(action)) {
+            if (arguments.remaining() < 2) {
+                BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_TRUST,
+                        Placeholder.of(Translation.Placeholder.COMMAND, "/bolt trust"),
+                        Placeholder.of(Translation.Placeholder.LITERAL, "(add|remove)"));
+                return;
+            }
+            trustModify(plugin, source, player.getUniqueId(), "add".equalsIgnoreCase(action), arguments);
+        } else {
+            trustList(plugin, source, player.getUniqueId());
+        }
+    }
+
+    /**
+     * {@code /bolt edit <add|remove> <player>} — click-based; grants/revokes a player on the next
+     * protection clicked (default access type). Matches Bukkit's EditCommand.
+     */
+    private static void edit(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
             return;
         }
-        final String sourceTypeName = sourceTypeArg.toLowerCase();
+        final Player player = (Player) source;
+        if (arguments.remaining() < 2) {
+            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_EDIT,
+                    Placeholder.of(Translation.Placeholder.COMMAND, "/bolt edit"),
+                    Placeholder.of(Translation.Placeholder.LITERAL, "(add|remove)"));
+            return;
+        }
+        final boolean adding = "add".equalsIgnoreCase(arguments.next());
+        final String target = arguments.next();
+        final UUID uuid = resolvePlayer(target);
+        if (uuid == null) {
+            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, target));
+            return;
+        }
+        final BoltPlayer boltPlayer = plugin.player(player);
+        boltPlayer.setAction(new Action(Action.Type.EDIT, "bolt.command.edit", Boolean.toString(adding)));
+        boltPlayer.getModifications().put(Source.player(uuid), plugin.getDefaultAccessType());
+        BoltComponents.sendMessage(player, Translation.CLICK_ACTION, plugin.isUseActionBar(),
+                Placeholder.of(Translation.Placeholder.ACTION, BoltComponents.translateRaw(Translation.EDIT, player)));
+    }
+
+    /**
+     * {@code /bolt modify <add|remove> <accessType> <sourceType> <identifier...>} — click-based;
+     * stages one or more source→access modifications applied to the next protection clicked.
+     * Matches Bukkit's ModifyCommand.
+     */
+    private static void modify(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
+            return;
+        }
+        final Player player = (Player) source;
+        if (arguments.remaining() < 3) {
+            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_MODIFY,
+                    Placeholder.of(Translation.Placeholder.COMMAND, "/bolt modify"),
+                    Placeholder.of(Translation.Placeholder.LITERAL, "(add|remove)"));
+            return;
+        }
+        final BoltPlayer boltPlayer = plugin.player(player);
+        final boolean adding = "add".equalsIgnoreCase(arguments.next());
+        final String accessTypeName = arguments.next().toLowerCase();
+        final Access access = plugin.getBolt().getAccessRegistry().getAccessByType(accessTypeName).orElse(null);
+        if (access == null) {
+            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_INVALID, Placeholder.of(Translation.Placeholder.ACCESS_TYPE, accessTypeName));
+            return;
+        }
+        if (access.restricted() && !source.hasPermission("bolt.type.access." + access.type())) {
+            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_NO_PERMISSION);
+            return;
+        }
+        final String sourceTypeName = arguments.next().toLowerCase();
         final SourceType sourceType = plugin.getBolt().getSourceTypeRegistry().getSourceByName(sourceTypeName).orElse(null);
         if (sourceType == null) {
-            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_INVALID,
-                    Placeholder.of(Translation.Placeholder.SOURCE_TYPE, sourceTypeName));
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_INVALID, Placeholder.of(Translation.Placeholder.SOURCE_TYPE, sourceTypeName));
+            return;
+        }
+        if (sourceType.restricted() && !source.hasPermission("bolt.type.source." + sourceType.name())) {
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_NO_PERMISSION);
+            return;
+        }
+        final List<String> identifiers = new ArrayList<>();
+        if (sourceType.unique()) {
+            identifiers.add(sourceType.name());
+        } else {
+            if (arguments.remaining() < 1) {
+                BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_MODIFY,
+                        Placeholder.of(Translation.Placeholder.COMMAND, "/bolt modify"),
+                        Placeholder.of(Translation.Placeholder.LITERAL, "(add|remove)"));
+                return;
+            }
+            String identifier;
+            while ((identifier = arguments.next()) != null) {
+                identifiers.add(identifier);
+            }
+        }
+        for (final String identifier : identifiers) {
+            final String transformed = transformSource(sourceType.name(), identifier);
+            if (transformed == null) {
+                BoltComponents.sendMessage(source, Translation.GENERIC_NOT_FOUND, Placeholder.of(Translation.Placeholder.X, identifier));
+                continue;
+            }
+            boltPlayer.getModifications().put(Source.of(sourceType.name(), transformed), access.type());
+        }
+        if (boltPlayer.getModifications().isEmpty()) {
+            return;
+        }
+        boltPlayer.setAction(new Action(Action.Type.EDIT, "bolt.command.edit", Boolean.toString(adding)));
+        BoltComponents.sendMessage(player, Translation.CLICK_ACTION, plugin.isUseActionBar(),
+                Placeholder.of(Translation.Placeholder.ACTION, BoltComponents.translateRaw(Translation.EDIT, player)));
+    }
+
+    /**
+     * Shared global-access-list edit used by {@code /bolt trust} (on the sender) and
+     * {@code /bolt admin trust} (on a target player).
+     */
+    static void trustModify(final BoltPlugin plugin, final CommandSource source, final UUID uuid, final boolean adding, final Arguments arguments) {
+        final String sourceTypeName = arguments.next().toLowerCase();
+        final SourceType sourceType = plugin.getBolt().getSourceTypeRegistry().getSourceByName(sourceTypeName).orElse(null);
+        if (sourceType == null) {
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_INVALID, Placeholder.of(Translation.Placeholder.SOURCE_TYPE, sourceTypeName));
             return;
         }
         if (sourceType.restricted() && !source.hasPermission("bolt.type.source." + sourceType.name())) {
@@ -171,17 +295,10 @@ public final class BoltCommands {
             return;
         }
         final String identifier = arguments.next();
-        if (identifier == null) {
-            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_TRUST,
-                    Placeholder.of(Translation.Placeholder.COMMAND, "/bolt trust"),
-                    Placeholder.of(Translation.Placeholder.LITERAL, sourceTypeName + " <identifier>"));
-            return;
-        }
         final String accessTypeName = Optional.ofNullable(arguments.next()).orElse(plugin.getDefaultAccessType()).toLowerCase();
         final Access access = plugin.getBolt().getAccessRegistry().getAccessByType(accessTypeName).orElse(null);
         if (access == null) {
-            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_INVALID,
-                    Placeholder.of(Translation.Placeholder.ACCESS_TYPE, accessTypeName));
+            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_INVALID, Placeholder.of(Translation.Placeholder.ACCESS_TYPE, accessTypeName));
             return;
         }
         if (access.restricted() && !source.hasPermission("bolt.type.access." + access.type())) {
@@ -190,15 +307,29 @@ public final class BoltCommands {
         }
         final String transformed = transformSource(sourceType.name(), identifier);
         if (transformed == null) {
-            BoltComponents.sendMessage(source, Translation.GENERIC_NOT_FOUND,
-                    Placeholder.of(Translation.Placeholder.X, identifier));
+            BoltComponents.sendMessage(source, Translation.GENERIC_NOT_FOUND, Placeholder.of(Translation.Placeholder.X, identifier == null ? "" : identifier));
             return;
         }
-        final BoltPlayer boltPlayer = plugin.player(player);
-        boltPlayer.getModifications().put(Source.of(sourceType.name(), transformed), access.type());
-        boltPlayer.setAction(new Action(Action.Type.EDIT, "bolt.command.edit", "true"));
-        BoltComponents.sendMessage(player, Translation.CLICK_ACTION, plugin.isUseActionBar(),
-                Placeholder.of(Translation.Placeholder.ACTION, BoltComponents.translateRaw(Translation.EDIT, player)));
+        AccessList accessList = plugin.getBolt().getStore().loadAccessList(uuid).join();
+        if (accessList == null) {
+            accessList = new AccessList(uuid, new HashMap<>());
+        }
+        final Source src = Source.of(sourceType.name(), transformed);
+        if (adding) {
+            accessList.getAccess().put(src.toString(), access.type());
+        } else {
+            accessList.getAccess().remove(src.toString());
+        }
+        plugin.getBolt().getStore().saveAccessList(accessList);
+        BoltComponents.sendMessage(source, Translation.TRUST_EDITED);
+    }
+
+    static void trustList(final BoltPlugin plugin, final CommandSource source, final UUID uuid) {
+        final AccessList accessList = plugin.getBolt().getStore().loadAccessList(uuid).join();
+        final Map<String, String> accessMap = accessList == null ? new HashMap<>() : accessList.getAccess();
+        BoltComponents.sendMessage(source, Translation.INFO_SELF,
+                Placeholder.of(Translation.Placeholder.ACCESS_LIST_SIZE, String.valueOf(accessMap.size())),
+                Placeholder.of(Translation.Placeholder.ACCESS_LIST, Protections.accessList(accessMap, plugin, source)));
     }
 
     /**
@@ -256,20 +387,45 @@ public final class BoltCommands {
         }
         final int argIndex = tokens.length - 1;
         final String partial = tokens[argIndex];
-        if ("lock".equals(command)) {
-            if (argIndex == 0) {
-                return filter(protectionTypeNames(plugin, source), partial);
-            }
-        } else if ("trust".equals(command)) {
-            if (argIndex == 0) {
-                return filter(sourceTypeNames(plugin, source), partial);
-            } else if (argIndex == 1) {
-                if (SourceTypes.PLAYER.equalsIgnoreCase(tokens[0])) {
+        switch (command) {
+            case "lock":
+                if (argIndex == 0) {
+                    return filter(protectionTypeNames(plugin, source), partial);
+                } else if (argIndex == 1 && source.hasPermission("bolt.admin")) {
+                    return filter(Collections.singletonList("force"), partial);
+                }
+                break;
+            case "trust":
+                if (argIndex == 0) {
+                    return filter(Arrays.asList("add", "remove", "list"), partial);
+                } else if (argIndex == 1) {
+                    return filter(sourceTypeNames(plugin, source), partial);
+                } else if (argIndex == 2 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[1])) {
+                    return filter(onlinePlayerNames(), partial);
+                } else if (argIndex == 3) {
+                    return filter(accessTypeNames(plugin, source), partial);
+                }
+                break;
+            case "edit":
+                if (argIndex == 0) {
+                    return filter(Arrays.asList("add", "remove"), partial);
+                } else if (argIndex == 1) {
                     return filter(onlinePlayerNames(), partial);
                 }
-            } else if (argIndex == 2) {
-                return filter(accessTypeNames(plugin, source), partial);
-            }
+                break;
+            case "modify":
+                if (argIndex == 0) {
+                    return filter(Arrays.asList("add", "remove"), partial);
+                } else if (argIndex == 1) {
+                    return filter(accessTypeNames(plugin, source), partial);
+                } else if (argIndex == 2) {
+                    return filter(sourceTypeNames(plugin, source), partial);
+                } else if (argIndex >= 3 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[2])) {
+                    return filter(onlinePlayerNames(), partial);
+                }
+                break;
+            default:
+                break;
         }
         return Collections.emptyList();
     }

@@ -1,16 +1,12 @@
 package org.popcraft.bolt.command;
 
 import org.popcraft.bolt.BoltPlugin;
-import org.popcraft.bolt.access.Access;
-import org.popcraft.bolt.access.AccessList;
 import org.popcraft.bolt.data.SQLStore;
 import org.popcraft.bolt.data.Store;
 import org.popcraft.bolt.lang.Translation;
 import org.popcraft.bolt.protection.BlockProtection;
 import org.popcraft.bolt.protection.EntityProtection;
 import org.popcraft.bolt.protection.Protection;
-import org.popcraft.bolt.source.Source;
-import org.popcraft.bolt.source.SourceType;
 import org.popcraft.bolt.util.Action;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.Placeholder;
@@ -31,7 +27,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -368,59 +363,10 @@ public final class AdminCommands {
                 source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin trust <player> " + action.toLowerCase() + " <sourceType> <identifier> [access]"));
                 return;
             }
-            trustModify(plugin, source, target, "add".equalsIgnoreCase(action), arguments);
+            BoltCommands.trustModify(plugin, source, target, "add".equalsIgnoreCase(action), arguments);
         } else {
-            trustList(plugin, source, target);
+            BoltCommands.trustList(plugin, source, target);
         }
-    }
-
-    private static void trustModify(final BoltPlugin plugin, final CommandSource source, final UUID uuid, final boolean adding, final Arguments arguments) {
-        final String sourceTypeName = arguments.next().toLowerCase();
-        final SourceType sourceType = plugin.getBolt().getSourceTypeRegistry().getSourceByName(sourceTypeName).orElse(null);
-        if (sourceType == null) {
-            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_INVALID, Placeholder.of(Translation.Placeholder.SOURCE_TYPE, sourceTypeName));
-            return;
-        }
-        if (sourceType.restricted() && !source.hasPermission("bolt.type.source." + sourceType.name())) {
-            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_NO_PERMISSION);
-            return;
-        }
-        final String identifier = arguments.next();
-        final String accessTypeName = Optional.ofNullable(arguments.next()).orElse(plugin.getDefaultAccessType()).toLowerCase();
-        final Access access = plugin.getBolt().getAccessRegistry().getAccessByType(accessTypeName).orElse(null);
-        if (access == null) {
-            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_INVALID, Placeholder.of(Translation.Placeholder.ACCESS_TYPE, accessTypeName));
-            return;
-        }
-        if (access.restricted() && !source.hasPermission("bolt.type.access." + access.type())) {
-            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_NO_PERMISSION);
-            return;
-        }
-        final String transformed = BoltCommands.transformSource(sourceType.name(), identifier);
-        if (transformed == null) {
-            BoltComponents.sendMessage(source, Translation.GENERIC_NOT_FOUND, Placeholder.of(Translation.Placeholder.X, identifier == null ? "" : identifier));
-            return;
-        }
-        AccessList accessList = plugin.getBolt().getStore().loadAccessList(uuid).join();
-        if (accessList == null) {
-            accessList = new AccessList(uuid, new HashMap<>());
-        }
-        final Source src = Source.of(sourceType.name(), transformed);
-        if (adding) {
-            accessList.getAccess().put(src.toString(), access.type());
-        } else {
-            accessList.getAccess().remove(src.toString());
-        }
-        plugin.getBolt().getStore().saveAccessList(accessList);
-        BoltComponents.sendMessage(source, Translation.TRUST_EDITED);
-    }
-
-    private static void trustList(final BoltPlugin plugin, final CommandSource source, final UUID uuid) {
-        final AccessList accessList = plugin.getBolt().getStore().loadAccessList(uuid).join();
-        final Map<String, String> accessMap = accessList == null ? new HashMap<>() : accessList.getAccess();
-        BoltComponents.sendMessage(source, Translation.INFO_SELF,
-                Placeholder.of(Translation.Placeholder.ACCESS_LIST_SIZE, String.valueOf(accessMap.size())),
-                Placeholder.of(Translation.Placeholder.ACCESS_LIST, Protections.accessList(accessMap, plugin, source)));
     }
 
     // --- Shared helpers ---------------------------------------------------------------------
