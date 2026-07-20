@@ -30,6 +30,7 @@ import org.popcraft.bolt.data.Store;
 import org.popcraft.bolt.lang.Translator;
 import org.popcraft.bolt.listeners.BoltBlockListener;
 import org.popcraft.bolt.listeners.BoltEntityListener;
+import org.popcraft.bolt.listeners.BoltInventoryListener;
 import org.popcraft.bolt.listeners.BoltPlayerListener;
 import org.popcraft.bolt.matcher.Matchers;
 import org.popcraft.bolt.protection.BlockProtection;
@@ -116,6 +117,7 @@ public class BoltPlugin {
         saveConfig(root);
         Sponge.getEventManager().registerListeners(this, new BoltBlockListener(this));
         Sponge.getEventManager().registerListeners(this, new BoltEntityListener(this));
+        Sponge.getEventManager().registerListeners(this, new BoltInventoryListener(this));
         Sponge.getEventManager().registerListeners(this, new BoltPlayerListener(this));
         BoltCommands.register(this);
     }
