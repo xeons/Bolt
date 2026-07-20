@@ -13,9 +13,12 @@ import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.filter.cause.First;
 import org.spongepowered.api.event.item.inventory.ChangeInventoryEvent;
+import org.spongepowered.api.event.item.inventory.ClickInventoryEvent;
 import org.spongepowered.api.event.item.inventory.InteractInventoryEvent;
 import org.spongepowered.api.item.inventory.BlockCarrier;
 import org.spongepowered.api.item.inventory.Inventory;
+import org.spongepowered.api.item.inventory.Slot;
+import org.spongepowered.api.item.inventory.transaction.SlotTransaction;
 import org.spongepowered.api.item.inventory.type.CarriedInventory;
 
 import java.util.Optional;
@@ -61,6 +64,41 @@ public final class BoltInventoryListener {
     public void onInventoryOpen(final InteractInventoryEvent.Open event, @First final Player player) {
         final Protection protection = getInventoryProtection(event.getTargetInventory());
         if (protection != null && !plugin.canAccess(protection, player, Permission.OPEN)) {
+            event.setCancelled(true);
+        }
+    }
+
+    /**
+     * Gates item movement within an open protected container by DEPOSIT/WITHDRAW. Covers normal
+     * clicks, shift-clicks and drags (all extend {@link ClickInventoryEvent}). A player may be able
+     * to open a container (e.g. a "display" protection) yet not be allowed to add or remove items.
+     */
+    @Listener
+    public void onClickInventory(final ClickInventoryEvent event, @First final Player player) {
+        final Protection protection = getInventoryProtection(event.getTargetInventory());
+        if (protection == null) {
+            return;
+        }
+        boolean deposit = false;
+        boolean withdraw = false;
+        final Inventory playerInventory = player.getInventory();
+        for (final SlotTransaction transaction : event.getTransactions()) {
+            final Slot slot = transaction.getSlot();
+            // Only care about changes to the container's own slots, not the player's inventory.
+            if (playerInventory.containsInventory(slot)) {
+                continue;
+            }
+            final int before = transaction.getOriginal().getQuantity();
+            final int after = transaction.getFinal().getQuantity();
+            if (after > before) {
+                deposit = true;
+            } else if (after < before) {
+                withdraw = true;
+            }
+        }
+        if (deposit && !plugin.canAccess(protection, player, Permission.DEPOSIT)) {
+            event.setCancelled(true);
+        } else if (withdraw && !plugin.canAccess(protection, player, Permission.WITHDRAW)) {
             event.setCancelled(true);
         }
     }
