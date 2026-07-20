@@ -17,6 +17,7 @@ import org.spongepowered.api.event.item.inventory.ClickInventoryEvent;
 import org.spongepowered.api.event.item.inventory.InteractInventoryEvent;
 import org.spongepowered.api.item.inventory.BlockCarrier;
 import org.spongepowered.api.item.inventory.Inventory;
+import org.spongepowered.api.item.inventory.ItemStackSnapshot;
 import org.spongepowered.api.item.inventory.Slot;
 import org.spongepowered.api.item.inventory.transaction.SlotTransaction;
 import org.spongepowered.api.item.inventory.type.CarriedInventory;
@@ -88,12 +89,20 @@ public final class BoltInventoryListener {
             if (playerInventory.containsInventory(slot)) {
                 continue;
             }
-            final int before = transaction.getOriginal().getQuantity();
-            final int after = transaction.getFinal().getQuantity();
-            if (after > before) {
-                deposit = true;
-            } else if (after < before) {
+            final ItemStackSnapshot before = transaction.getOriginal();
+            final ItemStackSnapshot after = transaction.getFinal();
+            final int beforeQuantity = before.getQuantity();
+            final int afterQuantity = after.getQuantity();
+            // Compare the actual item, not just the count, so an equal-size swap of two different
+            // items (a pure rearrange) is still detected on e.g. a display protection.
+            final boolean sameItem = beforeQuantity > 0 && afterQuantity > 0 && before.getType().equals(after.getType());
+            // Items left this container slot: emptied, reduced, or replaced by a different item.
+            if (beforeQuantity > 0 && (afterQuantity == 0 || !sameItem || afterQuantity < beforeQuantity)) {
                 withdraw = true;
+            }
+            // Items entered this container slot: filled, increased, or a different item placed in.
+            if (afterQuantity > 0 && (beforeQuantity == 0 || !sameItem || afterQuantity > beforeQuantity)) {
+                deposit = true;
             }
         }
         if (deposit && !plugin.canAccess(protection, player, Permission.DEPOSIT)) {
