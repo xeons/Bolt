@@ -4,6 +4,8 @@ import org.popcraft.bolt.BoltPlugin;
 import org.popcraft.bolt.access.Access;
 import org.popcraft.bolt.lang.Translation;
 import org.popcraft.bolt.source.Source;
+import org.popcraft.bolt.source.SourceType;
+import org.popcraft.bolt.source.SourceTypes;
 import org.popcraft.bolt.util.Action;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.BoltPlayer;
@@ -71,6 +73,9 @@ public final class BoltCommands {
             case "trust":
                 trust(plugin, source, arguments);
                 break;
+            case "password":
+                password(plugin, source, arguments);
+                break;
             default:
                 BoltComponents.sendMessage(source, Translation.COMMAND_INVALID);
                 break;
@@ -122,17 +127,40 @@ public final class BoltCommands {
         BoltComponents.sendMessage(player, Translation.CLICK_INFO, plugin.isUseActionBar());
     }
 
+    /**
+     * {@code /bolt trust <sourceType> <identifier> [accessType]} — stages a source→access
+     * modification and sets an EDIT action; the next click applies it to that protection. Supports
+     * player, password, and group source types.
+     */
     private static void trust(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
         if (!(source instanceof Player)) {
             BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
             return;
         }
         final Player player = (Player) source;
-        final String name = arguments.next();
-        if (name == null) {
+        final String sourceTypeArg = arguments.next();
+        if (sourceTypeArg == null) {
             BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_TRUST,
                     Placeholder.of(Translation.Placeholder.COMMAND, "/bolt trust"),
-                    Placeholder.of(Translation.Placeholder.LITERAL, "<player>"));
+                    Placeholder.of(Translation.Placeholder.LITERAL, "<sourceType> <identifier>"));
+            return;
+        }
+        final String sourceTypeName = sourceTypeArg.toLowerCase();
+        final SourceType sourceType = plugin.getBolt().getSourceTypeRegistry().getSourceByName(sourceTypeName).orElse(null);
+        if (sourceType == null) {
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_INVALID,
+                    Placeholder.of(Translation.Placeholder.SOURCE_TYPE, sourceTypeName));
+            return;
+        }
+        if (sourceType.restricted() && !source.hasPermission("bolt.type.source." + sourceType.name())) {
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_NO_PERMISSION);
+            return;
+        }
+        final String identifier = arguments.next();
+        if (identifier == null) {
+            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_TRUST,
+                    Placeholder.of(Translation.Placeholder.COMMAND, "/bolt trust"),
+                    Placeholder.of(Translation.Placeholder.LITERAL, sourceTypeName + " <identifier>"));
             return;
         }
         final String accessTypeName = Optional.ofNullable(arguments.next()).orElse(plugin.getDefaultAccessType()).toLowerCase();
@@ -146,17 +174,48 @@ public final class BoltCommands {
             BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_NO_PERMISSION);
             return;
         }
-        final UUID target = resolvePlayer(name);
-        if (target == null) {
-            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND,
-                    Placeholder.of(Translation.Placeholder.PLAYER, name));
+        final String transformed = transformSource(sourceType.name(), identifier);
+        if (transformed == null) {
+            BoltComponents.sendMessage(source, Translation.GENERIC_NOT_FOUND,
+                    Placeholder.of(Translation.Placeholder.X, identifier));
             return;
         }
         final BoltPlayer boltPlayer = plugin.player(player);
-        boltPlayer.getModifications().put(Source.player(target), access.type());
+        boltPlayer.getModifications().put(Source.of(sourceType.name(), transformed), access.type());
         boltPlayer.setAction(new Action(Action.Type.EDIT, "bolt.command.edit", "true"));
         BoltComponents.sendMessage(player, Translation.CLICK_ACTION, plugin.isUseActionBar(),
                 Placeholder.of(Translation.Placeholder.ACTION, BoltComponents.translateRaw(Translation.EDIT, player)));
+    }
+
+    /**
+     * {@code /bolt password <password>} — registers a password on the player's session so they can
+     * access password-protected protections until they disconnect.
+     */
+    private static void password(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
+            return;
+        }
+        final Player player = (Player) source;
+        if (arguments.remaining() > 0) {
+            plugin.player(player).addPassword(arguments.next());
+            BoltComponents.sendMessage(player, Translation.ENTER_PASSWORD);
+        } else {
+            BoltComponents.sendMessage(player, Translation.ENTER_PASSWORD_NONE);
+        }
+    }
+
+    /** Converts user-facing identifiers into the stored source identifier for each source type. */
+    private static String transformSource(final String sourceType, final String identifier) {
+        if (SourceTypes.PLAYER.equals(sourceType)) {
+            final UUID uuid = resolvePlayer(identifier);
+            return uuid == null ? null : uuid.toString();
+        }
+        if (SourceTypes.PASSWORD.equals(sourceType)) {
+            final Source password = Source.password(identifier);
+            return password == null ? null : password.getIdentifier();
+        }
+        return identifier;
     }
 
     private static UUID resolvePlayer(final String name) {

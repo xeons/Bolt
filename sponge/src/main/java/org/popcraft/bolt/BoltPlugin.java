@@ -1,17 +1,21 @@
 package org.popcraft.bolt;
 
 import com.google.inject.Inject;
+import ninja.leaping.configurate.commented.CommentedConfigurationNode;
+import ninja.leaping.configurate.loader.ConfigurationLoader;
 import org.slf4j.Logger;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.block.BlockType;
 import org.spongepowered.api.block.BlockTypes;
 import org.spongepowered.api.config.ConfigDir;
+import org.spongepowered.api.config.DefaultConfig;
 import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.EntityType;
 import org.spongepowered.api.entity.EntityTypes;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.game.state.GameInitializationEvent;
+import org.spongepowered.api.event.game.state.GameStoppingServerEvent;
 import org.spongepowered.api.plugin.Plugin;
 import org.spongepowered.api.plugin.PluginContainer;
 import org.spongepowered.api.world.Location;
@@ -22,6 +26,9 @@ import org.popcraft.bolt.access.AccessRegistry;
 import org.popcraft.bolt.access.DefaultAccess;
 import org.popcraft.bolt.command.BoltCommands;
 import org.popcraft.bolt.data.MemoryStore;
+import org.popcraft.bolt.data.SQLStore;
+import org.popcraft.bolt.data.SimpleProtectionCache;
+import org.popcraft.bolt.data.Store;
 import org.popcraft.bolt.listeners.BoltBlockListener;
 import org.popcraft.bolt.listeners.BoltEntityListener;
 import org.popcraft.bolt.listeners.BoltPlayerListener;
@@ -37,6 +44,7 @@ import org.popcraft.bolt.util.BlockLocation;
 import org.popcraft.bolt.util.ProtectableConfig;
 import org.popcraft.bolt.util.SpongePlayerResolver;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -57,6 +65,9 @@ public class BoltPlugin {
     @Inject
     @ConfigDir(sharedRoot = false)
     private Path configDir;
+    @Inject
+    @DefaultConfig(sharedRoot = false)
+    private ConfigurationLoader<CommentedConfigurationNode> configLoader;
 
     private final Map<BlockType, ProtectableConfig> protectableBlocks = new HashMap<>();
     private final Map<EntityType, ProtectableConfig> protectableEntities = new HashMap<>();
@@ -64,17 +75,75 @@ public class BoltPlugin {
     private String defaultAccessType = "normal";
     private boolean useActionBar = false;
     private Bolt bolt;
+    private SQLStore sqlStore;
 
     @Listener
     public void onInitialization(final GameInitializationEvent event) {
-        this.bolt = new Bolt(new MemoryStore());
+        this.bolt = new Bolt(createStore());
         registerTypes();
         registerProtectables();
         Sponge.getEventManager().registerListeners(this, new BoltBlockListener(this));
         Sponge.getEventManager().registerListeners(this, new BoltEntityListener(this));
         Sponge.getEventManager().registerListeners(this, new BoltPlayerListener(this));
         BoltCommands.register(this);
-        logger.info("Bolt enabled (SpongeAPI 7.4, MVP). Storage: in-memory (non-persistent).");
+    }
+
+    @Listener
+    public void onServerStopping(final GameStoppingServerEvent event) {
+        if (bolt != null && bolt.getStore() != null) {
+            bolt.getStore().flush().join();
+        }
+        if (sqlStore != null) {
+            sqlStore.close();
+        }
+    }
+
+    private Store createStore() {
+        CommentedConfigurationNode root = null;
+        try {
+            root = configLoader.load();
+        } catch (IOException e) {
+            logger.warn("Failed to load config, using defaults: " + e.getMessage());
+        }
+        if (root == null) {
+            logger.info("Bolt storage: in-memory (non-persistent) — config unavailable.");
+            return new MemoryStore();
+        }
+        final CommentedConfigurationNode settings = root.getNode("settings");
+        useActionBar = settings.getNode("use-action-bar").getBoolean(false);
+        settings.getNode("use-action-bar").setValue(useActionBar);
+
+        final CommentedConfigurationNode database = root.getNode("database");
+        final String type = database.getNode("type").getString("sqlite").toLowerCase();
+        final String defaultPath = configDir.resolve("bolt.db").toString();
+        final String path = database.getNode("path").getString(defaultPath);
+        final String hostname = database.getNode("hostname").getString("");
+        final String db = database.getNode("database").getString("");
+        final String username = database.getNode("username").getString("");
+        final String password = database.getNode("password").getString("");
+        final String prefix = database.getNode("prefix").getString("");
+        // Materialize defaults so users get a config file to edit.
+        database.getNode("type").setValue(type);
+        database.getNode("path").setValue(path);
+        database.getNode("hostname").setValue(hostname);
+        database.getNode("database").setValue(db);
+        database.getNode("username").setValue(username);
+        database.getNode("password").setValue(password);
+        database.getNode("prefix").setValue(prefix);
+        try {
+            configLoader.save(root);
+        } catch (IOException e) {
+            logger.warn("Failed to save config: " + e.getMessage());
+        }
+
+        if ("none".equals(type) || "memory".equals(type)) {
+            logger.info("Bolt storage: in-memory (non-persistent).");
+            return new MemoryStore();
+        }
+        final SQLStore.Configuration configuration = new SQLStore.Configuration(type, path, hostname, db, username, password, prefix, new HashMap<>());
+        this.sqlStore = new SQLStore(configuration);
+        logger.info("Bolt storage: " + type + (("sqlite".equals(type)) ? " (" + path + ")" : " (" + hostname + "/" + db + ")"));
+        return new SimpleProtectionCache(sqlStore);
     }
 
     private void registerTypes() {
