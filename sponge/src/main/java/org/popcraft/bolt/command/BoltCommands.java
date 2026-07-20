@@ -23,8 +23,11 @@ import org.spongepowered.api.world.Location;
 import org.spongepowered.api.world.World;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -37,15 +40,23 @@ public final class BoltCommands {
     private BoltCommands() {
     }
 
+    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "password"};
+
     private interface Handler {
         void handle(BoltPlugin plugin, CommandSource source, Arguments arguments);
     }
 
+    private interface Suggester {
+        List<String> suggest(BoltPlugin plugin, CommandSource source, String raw);
+    }
+
+    private static final Suggester NO_SUGGESTIONS = (plugin, source, raw) -> Collections.emptyList();
+
     public static void register(final BoltPlugin plugin) {
         final CommandManager commandManager = Sponge.getCommandManager();
-        commandManager.register(plugin, callable(plugin, "bolt.command", BoltCommands::dispatch), "bolt");
-        commandManager.register(plugin, callable(plugin, "bolt.command.lock", BoltCommands::lock), "lock");
-        commandManager.register(plugin, callable(plugin, "bolt.command.unlock", BoltCommands::unlock), "unlock");
+        commandManager.register(plugin, callable(plugin, "bolt.command", BoltCommands::dispatch, BoltCommands::suggestRoot), "bolt");
+        commandManager.register(plugin, callable(plugin, "bolt.command.lock", BoltCommands::lock, (p, s, raw) -> suggestArgs(p, s, "lock", raw)), "lock");
+        commandManager.register(plugin, callable(plugin, "bolt.command.unlock", BoltCommands::unlock, NO_SUGGESTIONS), "unlock");
     }
 
     private static void dispatch(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
@@ -218,6 +229,126 @@ public final class BoltCommands {
         return identifier;
     }
 
+    // --- Tab completion ---------------------------------------------------------------------
+
+    private static List<String> suggestRoot(final BoltPlugin plugin, final CommandSource source, final String raw) {
+        final String[] tokens = tokenize(raw);
+        if (tokens.length <= 1) {
+            final String partial = tokens.length == 0 ? "" : tokens[0];
+            final List<String> subs = new ArrayList<>();
+            for (final String sub : SUBCOMMANDS) {
+                if (source.hasPermission("bolt.command." + sub)) {
+                    subs.add(sub);
+                }
+            }
+            return filter(subs, partial);
+        }
+        return suggestArgs(plugin, source, tokens[0].toLowerCase(), afterFirstToken(raw));
+    }
+
+    private static List<String> suggestArgs(final BoltPlugin plugin, final CommandSource source, final String command, final String raw) {
+        String[] tokens = tokenize(raw);
+        if (tokens.length == 0) {
+            tokens = new String[]{""};
+        }
+        final int argIndex = tokens.length - 1;
+        final String partial = tokens[argIndex];
+        if ("lock".equals(command)) {
+            if (argIndex == 0) {
+                return filter(protectionTypeNames(plugin, source), partial);
+            }
+        } else if ("trust".equals(command)) {
+            if (argIndex == 0) {
+                return filter(sourceTypeNames(plugin, source), partial);
+            } else if (argIndex == 1) {
+                if (SourceTypes.PLAYER.equalsIgnoreCase(tokens[0])) {
+                    return filter(onlinePlayerNames(), partial);
+                }
+            } else if (argIndex == 2) {
+                return filter(accessTypeNames(plugin, source), partial);
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    private static String[] tokenize(final String raw) {
+        if (raw == null) {
+            return new String[0];
+        }
+        final boolean trailing = !raw.isEmpty() && Character.isWhitespace(raw.charAt(raw.length() - 1));
+        final String trimmed = raw.trim();
+        final String[] base = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
+        if (trailing) {
+            final String[] withPartial = new String[base.length + 1];
+            System.arraycopy(base, 0, withPartial, 0, base.length);
+            withPartial[base.length] = "";
+            return withPartial;
+        }
+        return base;
+    }
+
+    private static String afterFirstToken(final String raw) {
+        final String s = raw == null ? "" : raw;
+        int i = 0;
+        while (i < s.length() && Character.isWhitespace(s.charAt(i))) {
+            i++;
+        }
+        while (i < s.length() && !Character.isWhitespace(s.charAt(i))) {
+            i++;
+        }
+        return s.substring(Math.min(i, s.length()));
+    }
+
+    private static List<String> filter(final Collection<String> options, final String partial) {
+        final String prefix = partial.toLowerCase(Locale.ROOT);
+        final List<String> result = new ArrayList<>();
+        for (final String option : options) {
+            if (option.toLowerCase(Locale.ROOT).startsWith(prefix)) {
+                result.add(option);
+            }
+        }
+        Collections.sort(result);
+        return result;
+    }
+
+    private static List<String> protectionTypeNames(final BoltPlugin plugin, final CommandSource source) {
+        final List<String> names = new ArrayList<>();
+        for (final Access access : plugin.getBolt().getAccessRegistry().protections()) {
+            if (!access.restricted() || source.hasPermission("bolt.type.protection." + access.type())) {
+                names.add(access.type());
+            }
+        }
+        return names;
+    }
+
+    private static List<String> accessTypeNames(final BoltPlugin plugin, final CommandSource source) {
+        final List<String> names = new ArrayList<>();
+        for (final Access access : plugin.getBolt().getAccessRegistry().access()) {
+            if (!access.restricted() || source.hasPermission("bolt.type.access." + access.type())) {
+                names.add(access.type());
+            }
+        }
+        return names;
+    }
+
+    private static List<String> sourceTypeNames(final BoltPlugin plugin, final CommandSource source) {
+        final List<String> names = new ArrayList<>();
+        for (final SourceType sourceType : plugin.getBolt().getSourceTypeRegistry().sourceTypes()) {
+            if (!sourceType.restricted() || source.hasPermission("bolt.type.source." + sourceType.name())) {
+                names.add(sourceType.name());
+            }
+        }
+        return names;
+    }
+
+    private static List<String> onlinePlayerNames() {
+        final List<String> names = new ArrayList<>();
+        for (final Player player : Sponge.getServer().getOnlinePlayers()) {
+            names.add(player.getName());
+        }
+        return names;
+    }
+
     private static UUID resolvePlayer(final String name) {
         final Optional<Player> online = Sponge.getServer().getPlayer(name);
         if (online.isPresent()) {
@@ -233,7 +364,7 @@ public final class BoltCommands {
         return null;
     }
 
-    private static CommandCallable callable(final BoltPlugin plugin, final String permission, final Handler handler) {
+    private static CommandCallable callable(final BoltPlugin plugin, final String permission, final Handler handler, final Suggester suggester) {
         return new CommandCallable() {
             @Override
             public CommandResult process(final CommandSource source, final String arguments) {
@@ -243,7 +374,7 @@ public final class BoltCommands {
 
             @Override
             public List<String> getSuggestions(final CommandSource source, final String arguments, @Nullable final Location<World> targetPosition) {
-                return Collections.emptyList();
+                return suggester.suggest(plugin, source, arguments);
             }
 
             @Override

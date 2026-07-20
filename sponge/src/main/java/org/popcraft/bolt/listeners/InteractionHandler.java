@@ -11,6 +11,7 @@ import org.popcraft.bolt.util.Permission;
 import org.popcraft.bolt.util.Placeholder;
 import org.popcraft.bolt.util.ProtectableConfig;
 import org.popcraft.bolt.util.Protections;
+import org.popcraft.bolt.util.Time;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.living.player.Player;
@@ -140,12 +141,21 @@ public class InteractionHandler {
 
     private void handleInfo(final Player player, final Protection protection, final String display) {
         if (protection != null) {
+            final boolean showFull = protection.getOwner().equals(player.getUniqueId()) || player.hasPermission("bolt.command.info.full");
+            final boolean showAccessList = !protection.getAccess().isEmpty();
             final String ownerName = ownerName(protection.getOwner());
-            BoltComponents.sendMessage(player, Translation.INFO,
+            final String key = showFull
+                    ? (showAccessList ? Translation.INFO_FULL_ACCESS : Translation.INFO_FULL_NO_ACCESS)
+                    : Translation.INFO;
+            BoltComponents.sendMessage(player, key,
                     Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, Protections.protectionType(protection)),
                     Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)),
                     Placeholder.of(Translation.Placeholder.PLAYER, ownerName != null ? ownerName
-                            : BoltComponents.translateRaw(Translation.UNKNOWN, player)));
+                            : BoltComponents.translateRaw(Translation.UNKNOWN, player)),
+                    Placeholder.of(Translation.Placeholder.ACCESS_LIST_SIZE, String.valueOf(protection.getAccess().size())),
+                    Placeholder.of(Translation.Placeholder.ACCESS_LIST, Protections.accessList(protection.getAccess(), plugin, player)),
+                    Placeholder.of(Translation.Placeholder.CREATED_TIME, Time.relativeTimestamp(protection.getCreated(), player)),
+                    Placeholder.of(Translation.Placeholder.ACCESSED_TIME, Time.relativeTimestamp(protection.getAccessed(), player)));
         } else {
             BoltComponents.sendMessage(player, Translation.CLICK_NOT_LOCKED, plugin.isUseActionBar(),
                     Placeholder.of(Translation.Placeholder.PROTECTION, display));

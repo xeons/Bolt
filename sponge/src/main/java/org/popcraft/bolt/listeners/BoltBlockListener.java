@@ -134,4 +134,24 @@ public class BoltBlockListener {
     public void onExplosion(final ExplosionEvent.Detonate event) {
         event.getAffectedLocations().removeIf(plugin::isProtected);
     }
+
+    /**
+     * Environmental protection: cancels non-player world changes (pistons, fluids, fire spread)
+     * that would affect a protected block, unless the protection type inherently allows redstone
+     * (so a private lock — which permits redstone — still opens via redstone). Player-caused
+     * changes are handled by the break/place/interact listeners above.
+     */
+    @Listener
+    public void onPreChange(final ChangeBlockEvent.Pre event) {
+        if (event.getCause().first(Player.class).isPresent()) {
+            return;
+        }
+        for (final Location<World> location : event.getLocations()) {
+            final Protection protection = plugin.findProtection(location);
+            if (protection != null && !plugin.protectionTypeAllows(protection, Permission.REDSTONE)) {
+                event.setCancelled(true);
+                return;
+            }
+        }
+    }
 }

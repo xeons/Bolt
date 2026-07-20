@@ -29,6 +29,7 @@ import org.popcraft.bolt.data.MemoryStore;
 import org.popcraft.bolt.data.SQLStore;
 import org.popcraft.bolt.data.SimpleProtectionCache;
 import org.popcraft.bolt.data.Store;
+import org.popcraft.bolt.lang.Translator;
 import org.popcraft.bolt.listeners.BoltBlockListener;
 import org.popcraft.bolt.listeners.BoltEntityListener;
 import org.popcraft.bolt.listeners.BoltPlayerListener;
@@ -45,6 +46,7 @@ import org.popcraft.bolt.util.ProtectableConfig;
 import org.popcraft.bolt.util.SpongePlayerResolver;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -74,12 +76,15 @@ public class BoltPlugin {
     private String defaultProtectionType = "private";
     private String defaultAccessType = "normal";
     private boolean useActionBar = false;
+    private String language = "en";
+    private boolean perPlayerLocale = true;
     private Bolt bolt;
     private SQLStore sqlStore;
 
     @Listener
     public void onInitialization(final GameInitializationEvent event) {
         this.bolt = new Bolt(createStore());
+        loadTranslations();
         registerTypes();
         registerProtectables();
         Sponge.getEventManager().registerListeners(this, new BoltBlockListener(this));
@@ -112,6 +117,10 @@ public class BoltPlugin {
         final CommentedConfigurationNode settings = root.getNode("settings");
         useActionBar = settings.getNode("use-action-bar").getBoolean(false);
         settings.getNode("use-action-bar").setValue(useActionBar);
+        language = settings.getNode("language").getString("en");
+        settings.getNode("language").setValue(language);
+        perPlayerLocale = settings.getNode("per-player-locale").getBoolean(true);
+        settings.getNode("per-player-locale").setValue(perPlayerLocale);
 
         final CommentedConfigurationNode database = root.getNode("database");
         final String type = database.getNode("type").getString("sqlite").toLowerCase();
@@ -144,6 +153,19 @@ public class BoltPlugin {
         this.sqlStore = new SQLStore(configuration);
         logger.info("Bolt storage: " + type + (("sqlite".equals(type)) ? " (" + path + ")" : " (" + hostname + "/" + db + ")"));
         return new SimpleProtectionCache(sqlStore);
+    }
+
+    private void loadTranslations() {
+        try {
+            final Path langDir = configDir.resolve("lang");
+            Files.createDirectories(langDir);
+            // Loads all bundled languages plus any user overrides in the lang directory. Guarded
+            // broadly: the bundled-jar filesystem walk can throw unchecked on some classloaders, in
+            // which case Bolt falls back to the statically-loaded English strings.
+            Translator.loadAllTranslations(langDir, language, perPlayerLocale);
+        } catch (Throwable t) {
+            logger.warn("Failed to load translations, falling back to English: " + t.getMessage());
+        }
     }
 
     private void registerTypes() {
@@ -307,6 +329,12 @@ public class BoltPlugin {
         } else if (protection instanceof EntityProtection) {
             bolt.getStore().removeEntityProtection((EntityProtection) protection);
         }
+    }
+
+    /** Whether the protection's type inherently grants a permission (e.g. private allows redstone). */
+    public boolean protectionTypeAllows(final Protection protection, final String permission) {
+        final Access access = bolt.getAccessRegistry().getProtectionByType(protection.getType()).orElse(null);
+        return access != null && access.permissions().contains(permission);
     }
 
     public boolean canAccess(final Protection protection, final Player player, final String... permissions) {
