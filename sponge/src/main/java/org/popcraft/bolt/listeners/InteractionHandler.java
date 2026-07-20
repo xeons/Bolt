@@ -17,6 +17,7 @@ import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.entity.living.player.User;
 import org.spongepowered.api.service.user.UserStorageService;
+import org.spongepowered.api.text.Text;
 import org.spongepowered.api.world.Location;
 import org.spongepowered.api.world.World;
 
@@ -78,6 +79,12 @@ public class InteractionHandler {
                 break;
             case EDIT:
                 handleEdit(player, boltPlayer, action, protection, display);
+                break;
+            case TRANSFER:
+                handleTransfer(player, action, protection, display);
+                break;
+            case DEBUG:
+                handleDebug(player, protection);
                 break;
             default:
                 break;
@@ -185,6 +192,31 @@ public class InteractionHandler {
             BoltComponents.sendMessage(player, Translation.CLICK_NOT_LOCKED, plugin.isUseActionBar(),
                     Placeholder.of(Translation.Placeholder.PROTECTION, display));
         }
+    }
+
+    private void handleTransfer(final Player player, final Action action, final Protection protection, final String display) {
+        if (protection != null) {
+            if (player.getUniqueId().equals(protection.getOwner()) || action.isAdmin()) {
+                final UUID uuid = UUID.fromString(action.getData());
+                protection.setOwner(uuid);
+                plugin.saveProtection(protection);
+                final String name = ownerName(uuid);
+                BoltComponents.sendMessage(player, Translation.CLICK_TRANSFER_CONFIRM, plugin.isUseActionBar(),
+                        Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, Protections.protectionType(protection)),
+                        Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)),
+                        Placeholder.of(Translation.Placeholder.PLAYER, name != null ? name
+                                : BoltComponents.translateRaw(Translation.UNKNOWN, player)));
+            } else {
+                BoltComponents.sendMessage(player, Translation.CLICK_EDITED_NO_OWNER, plugin.isUseActionBar());
+            }
+        } else {
+            BoltComponents.sendMessage(player, Translation.CLICK_NOT_LOCKED, plugin.isUseActionBar(),
+                    Placeholder.of(Translation.Placeholder.PROTECTION, display));
+        }
+    }
+
+    private void handleDebug(final Player player, final Protection protection) {
+        player.sendMessage(Text.of(protection == null ? "No protection here." : protection.toString()));
     }
 
     private String ownerName(final UUID owner) {

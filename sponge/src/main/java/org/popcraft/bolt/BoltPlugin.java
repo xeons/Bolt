@@ -332,6 +332,10 @@ public class BoltPlugin {
         return container;
     }
 
+    public Path getConfigDir() {
+        return configDir;
+    }
+
     public boolean isUseActionBar() {
         return useActionBar;
     }

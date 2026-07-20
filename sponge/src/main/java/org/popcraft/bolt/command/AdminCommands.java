@@ -1,29 +1,53 @@
 package org.popcraft.bolt.command;
 
 import org.popcraft.bolt.BoltPlugin;
+import org.popcraft.bolt.access.Access;
+import org.popcraft.bolt.access.AccessList;
+import org.popcraft.bolt.data.SQLStore;
 import org.popcraft.bolt.data.Store;
 import org.popcraft.bolt.lang.Translation;
 import org.popcraft.bolt.protection.BlockProtection;
 import org.popcraft.bolt.protection.EntityProtection;
+import org.popcraft.bolt.protection.Protection;
+import org.popcraft.bolt.source.Source;
+import org.popcraft.bolt.source.SourceType;
+import org.popcraft.bolt.util.Action;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.Placeholder;
+import org.popcraft.bolt.util.Protections;
+import org.popcraft.bolt.util.SchedulerUtil;
 import org.spongepowered.api.Sponge;
 import org.spongepowered.api.command.CommandSource;
+import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.text.Text;
 import org.spongepowered.api.text.format.TextColors;
 import org.spongepowered.api.world.Location;
 import org.spongepowered.api.world.World;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * {@code /bolt admin <sub>} — moderation/maintenance commands. Each subcommand is gated on
- * {@code bolt.command.admin.<sub>}. Migration/import tooling is intentionally omitted.
+ * {@code /bolt admin <sub>} — moderation/maintenance commands, mirroring the Bukkit
+ * implementation. Each subcommand is gated on {@code bolt.command.admin.<sub>}. Migration/convert
+ * tooling is intentionally omitted; {@code report} is a reduced version (the Bukkit hit/miss
+ * profiler is bStats-backed and not part of this port).
  */
 public final class AdminCommands {
-    static final String[] SUBCOMMANDS = {"reload", "flush", "purge", "cleanup", "expire", "nearby", "report", "transfer"};
+    static final String[] SUBCOMMANDS = {"cleanup", "debug", "expire", "find", "flush", "nearby", "purge", "reload", "report", "storage", "transfer", "trust"};
+    private static final int MAX_LISTED = 25;
+    private static final AtomicBoolean STORAGE_BUSY = new AtomicBoolean();
 
     private AdminCommands() {
     }
@@ -31,7 +55,10 @@ public final class AdminCommands {
     static void handle(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
         final String sub = arguments.next();
         if (sub == null) {
-            source.sendMessage(Text.of(TextColors.GRAY, "Bolt admin: ", TextColors.YELLOW, String.join(", ", SUBCOMMANDS)));
+            final Store store = plugin.getBolt().getStore();
+            BoltComponents.sendMessage(source, Translation.STATUS,
+                    Placeholder.of(Translation.Placeholder.COUNT_BLOCKS, String.valueOf(store.loadBlockProtections().join().size())),
+                    Placeholder.of(Translation.Placeholder.COUNT_ENTITIES, String.valueOf(store.loadEntityProtections().join().size())));
             return;
         }
         final String key = sub.toLowerCase();
@@ -45,8 +72,7 @@ public final class AdminCommands {
                 BoltComponents.sendMessage(source, Translation.RELOAD);
                 break;
             case "flush":
-                plugin.getBolt().getStore().flush();
-                BoltComponents.sendMessage(source, Translation.FLUSH);
+                flush(plugin, source);
                 break;
             case "purge":
                 purge(plugin, source, arguments);
@@ -60,11 +86,23 @@ public final class AdminCommands {
             case "nearby":
                 nearby(plugin, source, arguments);
                 break;
+            case "find":
+                find(plugin, source, arguments);
+                break;
             case "report":
                 report(plugin, source);
                 break;
             case "transfer":
                 transfer(plugin, source, arguments);
+                break;
+            case "debug":
+                debug(plugin, source);
+                break;
+            case "storage":
+                storage(plugin, source, arguments);
+                break;
+            case "trust":
+                trust(plugin, source, arguments);
                 break;
             default:
                 BoltComponents.sendMessage(source, Translation.COMMAND_INVALID);
@@ -72,69 +110,80 @@ public final class AdminCommands {
         }
     }
 
+    private static void flush(final BoltPlugin plugin, final CommandSource source) {
+        final Store store = plugin.getBolt().getStore();
+        BoltComponents.sendMessage(source, Translation.FLUSH, Placeholder.of(Translation.Placeholder.COUNT, String.valueOf(store.pendingSave())));
+        store.flush().join();
+    }
+
     private static void purge(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
-        final String name = arguments.next();
-        if (name == null) {
+        final String owner = arguments.next();
+        if (owner == null) {
             source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin purge <player>"));
             return;
         }
-        final UUID owner = BoltCommands.resolvePlayer(name);
-        if (owner == null) {
-            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, name));
+        final UUID uuid = BoltCommands.resolvePlayer(owner);
+        if (uuid == null) {
+            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, owner));
             return;
         }
-        final Store store = plugin.getBolt().getStore();
-        int removed = 0;
-        for (final BlockProtection protection : new ArrayList<>(store.loadBlockProtections().join())) {
-            if (owner.equals(protection.getOwner())) {
-                store.removeBlockProtection(protection);
-                removed++;
+        for (final Protection protection : allProtections(plugin)) {
+            if (uuid.equals(protection.getOwner())) {
+                plugin.removeProtection(protection);
             }
         }
-        for (final EntityProtection protection : new ArrayList<>(store.loadEntityProtections().join())) {
-            if (owner.equals(protection.getOwner())) {
-                store.removeEntityProtection(protection);
-                removed++;
-            }
-        }
-        BoltComponents.sendMessage(source, Translation.PURGE, Placeholder.of(Translation.Placeholder.COUNT, String.valueOf(removed)));
+        BoltComponents.sendMessage(source, Translation.PURGE, Placeholder.of(Translation.Placeholder.PLAYER, owner));
     }
 
     private static void cleanup(final BoltPlugin plugin, final CommandSource source) {
-        // Conservative cleanup: only remove block protections whose world no longer exists (safe
-        // without loading chunks; a fuller "block no longer protectable" sweep is deferred).
         final Store store = plugin.getBolt().getStore();
+        final List<BlockProtection> protections = new ArrayList<>(store.loadBlockProtections().join());
+        BoltComponents.sendMessage(source, Translation.CLEANUP_START, Placeholder.of(Translation.Placeholder.COUNT, String.valueOf(protections.size())));
+        final long start = System.currentTimeMillis();
         int removed = 0;
-        for (final BlockProtection protection : new ArrayList<>(store.loadBlockProtections().join())) {
-            if (!Sponge.getServer().getWorld(protection.getWorld()).isPresent()) {
+        for (final BlockProtection protection : protections) {
+            final Optional<World> world = Sponge.getServer().getWorld(protection.getWorld());
+            if (!world.isPresent()) {
+                continue;
+            }
+            // Loading each block loads its chunk; heavy for large datasets, but this mirrors the
+            // Bukkit "block no longer matches the stored type" cleanup.
+            final String currentId = world.get().getBlockType(protection.getX(), protection.getY(), protection.getZ()).getId();
+            if (!protection.getBlock().equals(currentId)) {
                 store.removeBlockProtection(protection);
                 removed++;
+                BoltComponents.sendMessage(source, Translation.CLEANUP_REMOVE, Placeholder.of(Translation.Placeholder.RAW_PROTECTION, Protections.raw(protection)));
             }
         }
+        final long seconds = (System.currentTimeMillis() - start) / 1000L;
         BoltComponents.sendMessage(source, Translation.CLEANUP_COMPLETE,
                 Placeholder.of(Translation.Placeholder.COUNT, String.valueOf(removed)),
-                Placeholder.of(Translation.Placeholder.SECONDS, "0"));
+                Placeholder.of(Translation.Placeholder.SECONDS, String.valueOf(seconds)));
     }
 
     private static void expire(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
-        final Integer days = arguments.nextAsInteger();
-        if (days == null || days < 0) {
+        final Integer timeValue = arguments.nextAsInteger();
+        TimeUnit timeUnit = null;
+        final String unitArg = arguments.next();
+        if (unitArg != null) {
+            try {
+                timeUnit = TimeUnit.valueOf(unitArg.toUpperCase());
+            } catch (IllegalArgumentException ignored) {
+                // Handled below.
+            }
+        }
+        if (timeValue == null || timeUnit == null) {
             BoltComponents.sendMessage(source, Translation.EXPIRE_INVALID_TIME);
             return;
         }
-        final long cutoff = System.currentTimeMillis() - days.longValue() * 86_400_000L;
+        final long expireTime = System.currentTimeMillis() - TimeUnit.MILLISECONDS.convert(timeValue, timeUnit);
         final Store store = plugin.getBolt().getStore();
-        int removed = 0;
+        long removed = 0;
         for (final BlockProtection protection : new ArrayList<>(store.loadBlockProtections().join())) {
-            if (protection.getAccessed() < cutoff) {
+            final long lastAccessed = protection.getAccessed();
+            if (lastAccessed > 0 && lastAccessed < expireTime) {
                 store.removeBlockProtection(protection);
-                removed++;
-            }
-        }
-        for (final EntityProtection protection : new ArrayList<>(store.loadEntityProtections().join())) {
-            if (protection.getAccessed() < cutoff) {
-                store.removeEntityProtection(protection);
-                removed++;
+                ++removed;
             }
         }
         BoltComponents.sendMessage(source, Translation.EXPIRE_COMPLETE, Placeholder.of(Translation.Placeholder.COUNT, String.valueOf(removed)));
@@ -146,72 +195,293 @@ public final class AdminCommands {
             return;
         }
         final Player player = (Player) source;
-        final Integer radiusArg = arguments.nextAsInteger();
-        final int radius = radiusArg == null ? 10 : Math.max(1, radiusArg);
-        final String world = player.getWorld().getName();
-        final Location<World> location = player.getLocation();
-        final int cx = location.getBlockX();
-        final int cy = location.getBlockY();
-        final int cz = location.getBlockZ();
-        final long r2 = (long) radius * radius;
-        int count = 0;
-        for (final BlockProtection protection : new ArrayList<>(plugin.getBolt().getStore().loadBlockProtections().join())) {
-            if (!world.equals(protection.getWorld())) {
-                continue;
-            }
-            final long dx = protection.getX() - cx;
-            final long dy = protection.getY() - cy;
-            final long dz = protection.getZ() - cz;
-            if (dx * dx + dy * dy + dz * dz <= r2) {
-                source.sendMessage(Text.of(TextColors.YELLOW, protection.getType(), TextColors.GRAY,
-                        " " + protection.getBlock() + " @ " + protection.getX() + ", " + protection.getY() + ", " + protection.getZ()));
-                count++;
+        final Integer limit = arguments.nextAsInteger();
+        if (limit == null) {
+            source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin nearby <radius>"));
+            return;
+        }
+        final Location<World> playerLocation = player.getLocation();
+        final List<Protection> nearby = new ArrayList<>();
+        for (final Protection protection : allProtections(plugin)) {
+            final double distance = distance(playerLocation, protection);
+            if (!Double.isNaN(distance) && distance < limit) {
+                nearby.add(protection);
             }
         }
-        source.sendMessage(Text.of(TextColors.GRAY, "Found ", TextColors.YELLOW, String.valueOf(count),
-                TextColors.GRAY, " protection(s) within " + radius + " blocks."));
+        nearby.sort(Comparator.comparingDouble(protection -> distanceOrMax(playerLocation, protection)));
+        listProtections(source, nearby);
+    }
+
+    private static void find(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        final String owner = arguments.next();
+        if (owner == null) {
+            source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin find <player>"));
+            return;
+        }
+        final UUID uuid = BoltCommands.resolvePlayer(owner);
+        if (uuid == null) {
+            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, owner));
+            return;
+        }
+        final List<Protection> owned = new ArrayList<>();
+        for (final Protection protection : allProtections(plugin)) {
+            if (uuid.equals(protection.getOwner())) {
+                owned.add(protection);
+            }
+        }
+        owned.sort(Comparator.comparingLong(Protection::getCreated).reversed());
+        listProtections(source, owned);
     }
 
     private static void report(final BoltPlugin plugin, final CommandSource source) {
+        // Reduced report: the Bukkit version is a bStats-backed live hit/miss profiler, which is
+        // not part of this port. Show protection counts and pending saves instead.
         final Store store = plugin.getBolt().getStore();
-        final int blocks = store.loadBlockProtections().join().size();
-        final int entities = store.loadEntityProtections().join().size();
-        source.sendMessage(Text.of(TextColors.GRAY, "Bolt protections: ", TextColors.YELLOW,
-                blocks + " block(s), " + entities + " entity/entities", TextColors.GRAY,
-                ", pending saves: " + store.pendingSave()));
+        source.sendMessage(Text.of(TextColors.GRAY, "Protected blocks: ", TextColors.YELLOW, String.valueOf(store.loadBlockProtections().join().size())));
+        source.sendMessage(Text.of(TextColors.GRAY, "Protected entities: ", TextColors.YELLOW, String.valueOf(store.loadEntityProtections().join().size())));
+        source.sendMessage(Text.of(TextColors.GRAY, "Pending saves: ", TextColors.YELLOW, String.valueOf(store.pendingSave())));
     }
 
     private static void transfer(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
-        final String fromName = arguments.next();
-        final String toName = arguments.next();
-        if (fromName == null || toName == null) {
-            source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin transfer <from> <to>"));
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
             return;
         }
-        final UUID from = BoltCommands.resolvePlayer(fromName);
-        final UUID to = BoltCommands.resolvePlayer(toName);
-        if (from == null || to == null) {
-            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND,
-                    Placeholder.of(Translation.Placeholder.PLAYER, from == null ? fromName : toName));
+        final Player player = (Player) source;
+        final String owner = arguments.next();
+        if (owner == null) {
+            source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin transfer <player> [newOwner]"));
             return;
         }
+        final String newOwner = arguments.next();
+        final UUID from = BoltCommands.resolvePlayer(owner);
+        if (from == null) {
+            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, owner));
+            return;
+        }
+        if (newOwner != null) {
+            final UUID to = BoltCommands.resolvePlayer(newOwner);
+            if (to == null) {
+                BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, newOwner));
+                return;
+            }
+            for (final Protection protection : allProtections(plugin)) {
+                if (from.equals(protection.getOwner())) {
+                    protection.setOwner(to);
+                    plugin.saveProtection(protection);
+                }
+            }
+            BoltComponents.sendMessage(player, Translation.CLICK_TRANSFER_ALL,
+                    Placeholder.of(Translation.Placeholder.OLD_PLAYER, owner),
+                    Placeholder.of(Translation.Placeholder.NEW_PLAYER, newOwner));
+        } else {
+            // Click-based single transfer to `owner`.
+            plugin.player(player).setAction(new Action(Action.Type.TRANSFER, "bolt.command.admin.transfer", from.toString(), true));
+            BoltComponents.sendMessage(player, Translation.CLICK_TRANSFER, plugin.isUseActionBar());
+        }
+    }
+
+    private static void debug(final BoltPlugin plugin, final CommandSource source) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
+            return;
+        }
+        final Player player = (Player) source;
+        plugin.player(player).setAction(new Action(Action.Type.DEBUG, "bolt.command.admin.debug"));
+        source.sendMessage(Text.of("Click to debug object"));
+    }
+
+    private static void storage(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        final String method = arguments.next();
+        final boolean export = "export".equalsIgnoreCase(method);
+        final boolean importing = "import".equalsIgnoreCase(method);
+        if (!export && !importing) {
+            source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin storage <export|import>"));
+            return;
+        }
+        if (STORAGE_BUSY.get()) {
+            BoltComponents.sendMessage(source, Translation.STORAGE_IN_PROGRESS);
+            return;
+        }
+        final Path exportPath = plugin.getConfigDir().resolve("export.db");
+        final SQLStore.Configuration configuration = new SQLStore.Configuration("sqlite", exportPath.toString(), "", "", "", "", "", new HashMap<>());
+        final Store currentStore = plugin.getBolt().getStore();
+        if (export) {
+            if (Files.exists(exportPath)) {
+                BoltComponents.sendMessage(source, Translation.STORAGE_EXPORT_EXISTS);
+                return;
+            }
+            final SQLStore exportStore = new SQLStore(configuration);
+            BoltComponents.sendMessage(source, Translation.STORAGE_EXPORT_STARTED);
+            STORAGE_BUSY.set(true);
+            transferStore(currentStore, exportStore).whenComplete((v, throwable) -> SchedulerUtil.schedule(plugin.getContainer(), () -> {
+                STORAGE_BUSY.set(false);
+                if (throwable != null) {
+                    throwable.printStackTrace();
+                }
+                BoltComponents.sendMessage(source, Translation.STORAGE_EXPORT_COMPLETED);
+                exportStore.close();
+            }));
+        } else {
+            if (!Files.exists(exportPath)) {
+                BoltComponents.sendMessage(source, Translation.STORAGE_IMPORT_DOESNT_EXIST);
+                return;
+            }
+            final SQLStore exportStore = new SQLStore(configuration);
+            BoltComponents.sendMessage(source, Translation.STORAGE_IMPORT_STARTED);
+            STORAGE_BUSY.set(true);
+            transferStore(exportStore, currentStore).whenComplete((v, throwable) -> SchedulerUtil.schedule(plugin.getContainer(), () -> {
+                STORAGE_BUSY.set(false);
+                if (throwable != null) {
+                    throwable.printStackTrace();
+                }
+                BoltComponents.sendMessage(source, Translation.STORAGE_IMPORT_COMPLETED);
+                exportStore.close();
+            }));
+        }
+    }
+
+    private static CompletableFuture<Void> transferStore(final Store from, final Store to) {
+        return CompletableFuture.runAsync(() -> {
+            from.loadBlockProtections().join().forEach(to::saveBlockProtection);
+            from.loadEntityProtections().join().forEach(to::saveEntityProtection);
+            from.loadGroups().join().forEach(to::saveGroup);
+            from.loadAccessLists().join().forEach(to::saveAccessList);
+            to.flush().join();
+        });
+    }
+
+    private static void trust(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        final String targetName = arguments.next();
+        if (targetName == null) {
+            source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin trust <player> (add|remove|list) [sourceType] [identifier] [access]"));
+            return;
+        }
+        final UUID target = BoltCommands.resolvePlayer(targetName);
+        if (target == null) {
+            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, targetName));
+            return;
+        }
+        final String action = arguments.next();
+        if ("add".equalsIgnoreCase(action) || "remove".equalsIgnoreCase(action)) {
+            if (arguments.remaining() < 2) {
+                source.sendMessage(Text.of(TextColors.RED, "Usage: /bolt admin trust <player> " + action.toLowerCase() + " <sourceType> <identifier> [access]"));
+                return;
+            }
+            trustModify(plugin, source, target, "add".equalsIgnoreCase(action), arguments);
+        } else {
+            trustList(plugin, source, target);
+        }
+    }
+
+    private static void trustModify(final BoltPlugin plugin, final CommandSource source, final UUID uuid, final boolean adding, final Arguments arguments) {
+        final String sourceTypeName = arguments.next().toLowerCase();
+        final SourceType sourceType = plugin.getBolt().getSourceTypeRegistry().getSourceByName(sourceTypeName).orElse(null);
+        if (sourceType == null) {
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_INVALID, Placeholder.of(Translation.Placeholder.SOURCE_TYPE, sourceTypeName));
+            return;
+        }
+        if (sourceType.restricted() && !source.hasPermission("bolt.type.source." + sourceType.name())) {
+            BoltComponents.sendMessage(source, Translation.EDIT_SOURCE_NO_PERMISSION);
+            return;
+        }
+        final String identifier = arguments.next();
+        final String accessTypeName = Optional.ofNullable(arguments.next()).orElse(plugin.getDefaultAccessType()).toLowerCase();
+        final Access access = plugin.getBolt().getAccessRegistry().getAccessByType(accessTypeName).orElse(null);
+        if (access == null) {
+            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_INVALID, Placeholder.of(Translation.Placeholder.ACCESS_TYPE, accessTypeName));
+            return;
+        }
+        if (access.restricted() && !source.hasPermission("bolt.type.access." + access.type())) {
+            BoltComponents.sendMessage(source, Translation.EDIT_ACCESS_NO_PERMISSION);
+            return;
+        }
+        final String transformed = BoltCommands.transformSource(sourceType.name(), identifier);
+        if (transformed == null) {
+            BoltComponents.sendMessage(source, Translation.GENERIC_NOT_FOUND, Placeholder.of(Translation.Placeholder.X, identifier == null ? "" : identifier));
+            return;
+        }
+        AccessList accessList = plugin.getBolt().getStore().loadAccessList(uuid).join();
+        if (accessList == null) {
+            accessList = new AccessList(uuid, new HashMap<>());
+        }
+        final Source src = Source.of(sourceType.name(), transformed);
+        if (adding) {
+            accessList.getAccess().put(src.toString(), access.type());
+        } else {
+            accessList.getAccess().remove(src.toString());
+        }
+        plugin.getBolt().getStore().saveAccessList(accessList);
+        BoltComponents.sendMessage(source, Translation.TRUST_EDITED);
+    }
+
+    private static void trustList(final BoltPlugin plugin, final CommandSource source, final UUID uuid) {
+        final AccessList accessList = plugin.getBolt().getStore().loadAccessList(uuid).join();
+        final Map<String, String> accessMap = accessList == null ? new HashMap<>() : accessList.getAccess();
+        BoltComponents.sendMessage(source, Translation.INFO_SELF,
+                Placeholder.of(Translation.Placeholder.ACCESS_LIST_SIZE, String.valueOf(accessMap.size())),
+                Placeholder.of(Translation.Placeholder.ACCESS_LIST, Protections.accessList(accessMap, plugin, source)));
+    }
+
+    // --- Shared helpers ---------------------------------------------------------------------
+
+    private static List<Protection> allProtections(final BoltPlugin plugin) {
         final Store store = plugin.getBolt().getStore();
-        int moved = 0;
-        for (final BlockProtection protection : new ArrayList<>(store.loadBlockProtections().join())) {
-            if (from.equals(protection.getOwner())) {
-                protection.setOwner(to);
-                store.saveBlockProtection(protection);
-                moved++;
+        final List<Protection> all = new ArrayList<>(store.loadBlockProtections().join());
+        all.addAll(store.loadEntityProtections().join());
+        return all;
+    }
+
+    private static void listProtections(final CommandSource source, final List<Protection> protections) {
+        if (protections.isEmpty()) {
+            BoltComponents.sendMessage(source, Translation.FIND_NONE);
+            return;
+        }
+        final int shown = Math.min(protections.size(), MAX_LISTED);
+        source.sendMessage(Text.of(TextColors.GRAY, "Found ", TextColors.YELLOW, String.valueOf(protections.size()),
+                TextColors.GRAY, " protection(s)" + (protections.size() > shown ? " (showing " + shown + ")" : "") + ":"));
+        for (int i = 0; i < shown; i++) {
+            final Protection protection = protections.get(i);
+            source.sendMessage(Text.of(TextColors.YELLOW, protection.getType(), TextColors.GRAY, " " + describe(protection)));
+        }
+    }
+
+    private static String describe(final Protection protection) {
+        if (protection instanceof BlockProtection) {
+            final BlockProtection block = (BlockProtection) protection;
+            return block.getBlock() + " @ " + block.getWorld() + " " + block.getX() + ", " + block.getY() + ", " + block.getZ();
+        } else if (protection instanceof EntityProtection) {
+            return ((EntityProtection) protection).getEntity() + " (" + protection.getId() + ")";
+        }
+        return "";
+    }
+
+    private static Optional<Location<World>> protectionLocation(final Protection protection) {
+        if (protection instanceof BlockProtection) {
+            final BlockProtection block = (BlockProtection) protection;
+            return Sponge.getServer().getWorld(block.getWorld())
+                    .map(world -> world.getLocation(block.getX() + 0.5, block.getY(), block.getZ() + 0.5));
+        } else if (protection instanceof EntityProtection) {
+            for (final World world : Sponge.getServer().getWorlds()) {
+                final Optional<Entity> entity = world.getEntity(protection.getId());
+                if (entity.isPresent()) {
+                    return Optional.of(entity.get().getLocation());
+                }
             }
         }
-        for (final EntityProtection protection : new ArrayList<>(store.loadEntityProtections().join())) {
-            if (from.equals(protection.getOwner())) {
-                protection.setOwner(to);
-                store.saveEntityProtection(protection);
-                moved++;
-            }
+        return Optional.empty();
+    }
+
+    private static double distance(final Location<World> from, final Protection protection) {
+        final Optional<Location<World>> to = protectionLocation(protection);
+        if (!to.isPresent() || !from.getExtent().equals(to.get().getExtent())) {
+            return Double.NaN;
         }
-        source.sendMessage(Text.of(TextColors.GRAY, "Transferred ", TextColors.YELLOW, String.valueOf(moved),
-                TextColors.GRAY, " protection(s) to " + toName + "."));
+        return from.getPosition().distance(to.get().getPosition());
+    }
+
+    private static double distanceOrMax(final Location<World> from, final Protection protection) {
+        final double distance = distance(from, protection);
+        return Double.isNaN(distance) ? Double.MAX_VALUE : distance;
     }
 }

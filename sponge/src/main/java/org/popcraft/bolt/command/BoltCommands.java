@@ -220,7 +220,7 @@ public final class BoltCommands {
     }
 
     /** Converts user-facing identifiers into the stored source identifier for each source type. */
-    private static String transformSource(final String sourceType, final String identifier) {
+    static String transformSource(final String sourceType, final String identifier) {
         if (SourceTypes.PLAYER.equals(sourceType)) {
             final UUID uuid = resolvePlayer(identifier);
             return uuid == null ? null : uuid.toString();

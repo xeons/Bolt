@@ -97,6 +97,10 @@ public final class Protections {
         return protection == null ? "" : protection.getType();
     }
 
+    public static String raw(final Protection protection) {
+        return protection == null ? "" : protection.toString();
+    }
+
     private static String prettify(final String catalogId) {
         if (catalogId == null) {
             return "";
