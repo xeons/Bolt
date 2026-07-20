@@ -20,6 +20,7 @@ import java.util.UUID;
  * @see SourceResolver
  */
 public final class Source {
+    private static volatile String passwordSalt = "";
     private final String type;
     private final String identifier;
 
@@ -45,9 +46,19 @@ public final class Source {
         return new Source(SourceTypes.PLAYER, uuid.toString());
     }
 
+    /**
+     * Sets a server-wide salt mixed into password hashes. Must be a stable per-server secret:
+     * password matching relies on {@link #password(String)} being deterministic, so the same salt
+     * must be used across restarts (otherwise existing password protections stop matching).
+     */
+    public static void setPasswordSalt(final String salt) {
+        passwordSalt = salt == null ? "" : salt;
+    }
+
     public static Source password(final String password) {
         try {
-            final MessageDigest messageDigest = MessageDigest.getInstance("SHA-1");
+            final MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
+            messageDigest.update(passwordSalt.getBytes(StandardCharsets.UTF_8));
             messageDigest.update(password.getBytes(StandardCharsets.UTF_8));
             final StringBuilder hash = new StringBuilder();
             for (final byte b : messageDigest.digest()) {

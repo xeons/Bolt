@@ -121,6 +121,13 @@ public class BoltPlugin {
         settings.getNode("language").setValue(language);
         perPlayerLocale = settings.getNode("per-player-locale").getBoolean(true);
         settings.getNode("per-player-locale").setValue(perPlayerLocale);
+        // Per-server secret mixed into password hashes; generated once and persisted.
+        String salt = settings.getNode("password-salt").getString("");
+        if (salt.isEmpty()) {
+            salt = UUID.randomUUID().toString();
+            settings.getNode("password-salt").setValue(salt);
+        }
+        Source.setPasswordSalt(salt);
 
         final CommentedConfigurationNode database = root.getNode("database");
         final String type = database.getNode("type").getString("sqlite").toLowerCase();

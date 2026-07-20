@@ -7,6 +7,7 @@ import org.popcraft.bolt.protection.Protection;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.Permission;
 import org.popcraft.bolt.util.Placeholder;
+import org.popcraft.bolt.util.ProtectableConfig;
 import org.popcraft.bolt.util.Protections;
 import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.living.player.Player;
@@ -14,6 +15,7 @@ import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.entity.DamageEntityEvent;
 import org.spongepowered.api.event.entity.DestructEntityEvent;
 import org.spongepowered.api.event.entity.InteractEntityEvent;
+import org.spongepowered.api.event.entity.SpawnEntityEvent;
 import org.spongepowered.api.event.filter.cause.First;
 
 import java.util.Optional;
@@ -28,7 +30,17 @@ public class BoltEntityListener {
     }
 
     @Listener
-    public void onInteractEntity(final InteractEntityEvent.Secondary event, @First final Player player) {
+    public void onInteractEntitySecondary(final InteractEntityEvent.Secondary event, @First final Player player) {
+        handleInteract(event, player);
+    }
+
+    @Listener
+    public void onInteractEntityPrimary(final InteractEntityEvent.Primary event, @First final Player player) {
+        // Left-click covers removing an item frame's contents / attacking a protected entity.
+        handleInteract(event, player);
+    }
+
+    private void handleInteract(final InteractEntityEvent event, final Player player) {
         final Entity entity = event.getTargetEntity();
         if (interactionHandler.triggerEntity(player, entity)) {
             event.setCancelled(true);
@@ -64,6 +76,29 @@ public class BoltEntityListener {
         final EntityProtection protection = plugin.loadProtection(event.getTargetEntity());
         if (protection != null) {
             plugin.removeProtection(protection);
+        }
+    }
+
+    @Listener
+    public void onSpawnEntity(final SpawnEntityEvent event) {
+        final Optional<Player> player = event.getCause().first(Player.class);
+        if (!player.isPresent()) {
+            return;
+        }
+        for (final Entity entity : event.getEntities()) {
+            final ProtectableConfig config = plugin.getProtectableConfig(entity);
+            if (config == null || config.defaultAccess() == null) {
+                continue;
+            }
+            if (plugin.isProtected(entity)) {
+                continue;
+            }
+            final String protectionType = config.defaultAccess().type();
+            final EntityProtection protection = plugin.createProtection(entity, player.get().getUniqueId(), protectionType);
+            plugin.saveProtection(protection);
+            BoltComponents.sendMessage(player.get(), Translation.CLICK_LOCKED, plugin.isUseActionBar(),
+                    Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, protectionType),
+                    Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(entity.getType().getId())));
         }
     }
 }
