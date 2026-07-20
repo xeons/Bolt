@@ -3,6 +3,7 @@ package org.popcraft.bolt.command;
 import org.popcraft.bolt.BoltPlugin;
 import org.popcraft.bolt.access.Access;
 import org.popcraft.bolt.access.AccessList;
+import org.popcraft.bolt.data.Store;
 import org.popcraft.bolt.lang.Translation;
 import org.popcraft.bolt.source.Source;
 import org.popcraft.bolt.source.SourceType;
@@ -10,6 +11,8 @@ import org.popcraft.bolt.source.SourceTypes;
 import org.popcraft.bolt.util.Action;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.BoltPlayer;
+import org.popcraft.bolt.util.Group;
+import org.popcraft.bolt.util.Mode;
 import org.popcraft.bolt.util.Placeholder;
 import org.popcraft.bolt.util.Protections;
 import org.spongepowered.api.Sponge;
@@ -21,6 +24,7 @@ import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.entity.living.player.User;
 import org.spongepowered.api.service.user.UserStorageService;
 import org.spongepowered.api.text.Text;
+import org.spongepowered.api.text.format.TextColors;
 import org.spongepowered.api.world.Location;
 import org.spongepowered.api.world.World;
 
@@ -45,7 +49,7 @@ public final class BoltCommands {
     private BoltCommands() {
     }
 
-    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "edit", "modify", "password", "admin"};
+    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "edit", "modify", "group", "mode", "password", "help", "admin"};
 
     private interface Handler {
         void handle(BoltPlugin plugin, CommandSource source, Arguments arguments);
@@ -94,6 +98,15 @@ public final class BoltCommands {
                 break;
             case "modify":
                 modify(plugin, source, arguments);
+                break;
+            case "group":
+                group(plugin, source, arguments);
+                break;
+            case "mode":
+                mode(plugin, source, arguments);
+                break;
+            case "help":
+                help(plugin, source, arguments);
                 break;
             case "password":
                 password(plugin, source, arguments);
@@ -350,6 +363,202 @@ public final class BoltCommands {
         }
     }
 
+    /** {@code /bolt mode <persist|nolock|nospam>} — toggles a per-player mode (persisted). */
+    private static void mode(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
+            return;
+        }
+        final Player player = (Player) source;
+        final BoltPlayer boltPlayer = plugin.player(player);
+        final String modeArgument = arguments.next();
+        if (modeArgument == null) {
+            BoltComponents.sendMessage(player, Translation.MODE_INVALID);
+            return;
+        }
+        final Mode mode;
+        try {
+            mode = Mode.valueOf(modeArgument.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            BoltComponents.sendMessage(player, Translation.MODE_INVALID);
+            return;
+        }
+        boltPlayer.toggleMode(mode);
+        final boolean hasMode = boltPlayer.hasMode(mode);
+        BoltComponents.sendMessage(player, hasMode ? Translation.MODE_ENABLED : Translation.MODE_DISABLED,
+                Placeholder.of(Translation.Placeholder.MODE, BoltComponents.translateRaw("mode_" + mode.name().toLowerCase(), player)));
+        plugin.savePlayerMode(player.getUniqueId(), mode, hasMode);
+    }
+
+    /** {@code /bolt group <create|delete|add|remove|list> <group> [players...]} — manage player groups. */
+    private static void group(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
+            return;
+        }
+        final Player player = (Player) source;
+        if (arguments.remaining() < 2) {
+            groupHelp(source);
+            return;
+        }
+        final String action = arguments.next().toLowerCase();
+        final String groupName = arguments.next();
+        final List<UUID> uuids = new ArrayList<>();
+        final List<String> names = new ArrayList<>();
+        String member;
+        while ((member = arguments.next()) != null) {
+            final UUID uuid = resolvePlayer(member);
+            if (uuid != null) {
+                uuids.add(uuid);
+                names.add(member);
+            }
+        }
+        final Store store = plugin.getBolt().getStore();
+        final Group existingGroup = store.loadGroup(groupName).join();
+        switch (action) {
+            case "create":
+                if (existingGroup != null) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_ALREADY_EXISTS, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else {
+                    store.saveGroup(new Group(groupName, player.getUniqueId(), uuids));
+                    BoltComponents.sendMessage(player, Translation.GROUP_CREATED, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                }
+                break;
+            case "delete":
+                if (existingGroup == null) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_DOESNT_EXIST, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else if (!existingGroup.getOwner().equals(player.getUniqueId())) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_NOT_OWNER, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else {
+                    store.removeGroup(existingGroup);
+                    BoltComponents.sendMessage(player, Translation.GROUP_DELETED, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                }
+                break;
+            case "add":
+                if (existingGroup == null) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_DOESNT_EXIST, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else if (!existingGroup.getOwner().equals(player.getUniqueId())) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_NOT_OWNER, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else {
+                    existingGroup.getMembers().addAll(uuids);
+                    store.saveGroup(existingGroup);
+                    for (final String name : names) {
+                        BoltComponents.sendMessage(player, Translation.GROUP_PLAYER_ADD,
+                                Placeholder.of(Translation.Placeholder.PLAYER, name),
+                                Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                    }
+                }
+                break;
+            case "remove":
+                if (existingGroup == null) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_DOESNT_EXIST, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else if (!existingGroup.getOwner().equals(player.getUniqueId())) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_NOT_OWNER, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else {
+                    existingGroup.getMembers().removeAll(uuids);
+                    store.saveGroup(existingGroup);
+                    for (final String name : names) {
+                        BoltComponents.sendMessage(player, Translation.GROUP_PLAYER_REMOVE,
+                                Placeholder.of(Translation.Placeholder.PLAYER, name),
+                                Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                    }
+                }
+                break;
+            case "list":
+                if (existingGroup == null) {
+                    BoltComponents.sendMessage(player, Translation.GROUP_DOESNT_EXIST, Placeholder.of(Translation.Placeholder.GROUP, groupName));
+                } else {
+                    final List<String> memberNames = new ArrayList<>();
+                    for (final UUID uuid : existingGroup.getMembers()) {
+                        memberNames.add(nameOf(uuid));
+                    }
+                    BoltComponents.sendMessage(player, Translation.GROUP_LIST_MEMBERS,
+                            Placeholder.of(Translation.Placeholder.GROUP, groupName),
+                            Placeholder.of(Translation.Placeholder.GROUP_MEMBERS, String.join(", ", memberNames)));
+                }
+                break;
+            default:
+                groupHelp(source);
+                break;
+        }
+    }
+
+    private static void groupHelp(final CommandSource source) {
+        BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_GROUP,
+                Placeholder.of(Translation.Placeholder.COMMAND, "/bolt group"),
+                Placeholder.of(Translation.Placeholder.LITERAL, "(create|delete|add|remove|list)"));
+    }
+
+    /** {@code /bolt help [command]} — shows general help or a specific command's help. */
+    private static void help(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        final String command = arguments.next();
+        if (command == null) {
+            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_HELP, Placeholder.of(Translation.Placeholder.COMMAND, "/bolt help"));
+            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_LONG_HELP);
+            final StringBuilder available = new StringBuilder();
+            for (final String sub : SUBCOMMANDS) {
+                if (source.hasPermission("bolt.command." + sub)) {
+                    if (available.length() > 0) {
+                        available.append(", ");
+                    }
+                    available.append(sub);
+                }
+            }
+            source.sendMessage(Text.of(TextColors.GRAY, "Commands: ", TextColors.YELLOW, available.toString()));
+            return;
+        }
+        final String cmd = command.toLowerCase();
+        final String shortKey;
+        final String longKey;
+        final String label;
+        if ("admin".equals(cmd)) {
+            final String subArg = arguments.next();
+            final String sub = subArg == null ? null : subArg.toLowerCase();
+            if (sub != null && contains(AdminCommands.SUBCOMMANDS, sub)) {
+                shortKey = "help_command_short_admin_" + sub;
+                longKey = "help_command_long_admin_" + sub;
+                label = "/bolt admin " + sub;
+            } else {
+                shortKey = "help_command_short_admin";
+                longKey = "help_command_long_admin";
+                label = "/bolt admin";
+            }
+        } else if (contains(SUBCOMMANDS, cmd)) {
+            shortKey = "help_command_short_" + cmd;
+            longKey = "help_command_long_" + cmd;
+            label = "/bolt " + cmd;
+        } else {
+            BoltComponents.sendMessage(source, Translation.COMMAND_INVALID);
+            return;
+        }
+        BoltComponents.sendMessage(source, shortKey, Placeholder.of(Translation.Placeholder.COMMAND, label));
+        BoltComponents.sendMessage(source, longKey);
+    }
+
+    private static String nameOf(final UUID uuid) {
+        final Optional<Player> online = Sponge.getServer().getPlayer(uuid);
+        if (online.isPresent()) {
+            return online.get().getName();
+        }
+        final Optional<UserStorageService> service = Sponge.getServiceManager().provide(UserStorageService.class);
+        if (service.isPresent()) {
+            final Optional<User> user = service.get().get(uuid);
+            if (user.isPresent()) {
+                return user.get().getName();
+            }
+        }
+        return uuid.toString();
+    }
+
+    private static boolean contains(final String[] array, final String value) {
+        for (final String item : array) {
+            if (item.equals(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Converts user-facing identifiers into the stored source identifier for each source type. */
     static String transformSource(final String sourceType, final String identifier) {
         if (SourceTypes.PLAYER.equals(sourceType)) {
@@ -422,6 +631,35 @@ public final class BoltCommands {
                     return filter(sourceTypeNames(plugin, source), partial);
                 } else if (argIndex >= 3 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[2])) {
                     return filter(onlinePlayerNames(), partial);
+                }
+                break;
+            case "mode":
+                if (argIndex == 0) {
+                    final List<String> modes = new ArrayList<>();
+                    for (final Mode mode : Mode.values()) {
+                        modes.add(mode.name().toLowerCase());
+                    }
+                    return filter(modes, partial);
+                }
+                break;
+            case "group":
+                if (argIndex == 0) {
+                    return filter(Arrays.asList("create", "delete", "add", "remove", "list"), partial);
+                } else if (argIndex == 1 && source instanceof Player) {
+                    return filter(plugin.getPlayersOwnedGroups((Player) source), partial);
+                } else if (argIndex >= 2) {
+                    return filter(onlinePlayerNames(), partial);
+                }
+                break;
+            case "help":
+                if (argIndex == 0) {
+                    final List<String> subs = new ArrayList<>();
+                    for (final String sub : SUBCOMMANDS) {
+                        if (source.hasPermission("bolt.command." + sub)) {
+                            subs.add(sub);
+                        }
+                    }
+                    return filter(subs, partial);
                 }
                 break;
             default:

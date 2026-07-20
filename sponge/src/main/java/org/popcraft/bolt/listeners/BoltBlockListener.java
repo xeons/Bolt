@@ -6,6 +6,8 @@ import org.popcraft.bolt.matcher.Matchers;
 import org.popcraft.bolt.protection.BlockProtection;
 import org.popcraft.bolt.protection.Protection;
 import org.popcraft.bolt.util.BoltComponents;
+import org.popcraft.bolt.util.BoltPlayer;
+import org.popcraft.bolt.util.Mode;
 import org.popcraft.bolt.util.Permission;
 import org.popcraft.bolt.util.Placeholder;
 import org.popcraft.bolt.util.ProtectableConfig;
@@ -121,7 +123,7 @@ public class BoltBlockListener {
                     plugin.saveProtection(exact);
                 } else {
                     plugin.removeProtection(exact);
-                    if (player.isPresent()) {
+                    if (player.isPresent() && !plugin.player(player.get()).hasMode(Mode.NOSPAM)) {
                         BoltComponents.sendMessage(player.get(), Translation.CLICK_UNLOCKED, plugin.isUseActionBar(),
                                 Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, Protections.protectionType(exact)),
                                 Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(exact)));
@@ -135,6 +137,10 @@ public class BoltBlockListener {
     public void onPlace(final ChangeBlockEvent.Place event) {
         final Optional<Player> player = event.getCause().first(Player.class);
         if (!player.isPresent()) {
+            return;
+        }
+        final BoltPlayer boltPlayer = plugin.player(player.get());
+        if (boltPlayer.hasMode(Mode.NOLOCK)) {
             return;
         }
         for (final Transaction<BlockSnapshot> transaction : event.getTransactions()) {
@@ -155,9 +161,11 @@ public class BoltBlockListener {
             final BlockProtection protection = plugin.createProtection(location.get(), player.get().getUniqueId(), protectionType);
             protection.setBlock(type.getId());
             plugin.saveProtection(protection);
-            BoltComponents.sendMessage(player.get(), Translation.CLICK_LOCKED, plugin.isUseActionBar(),
-                    Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, protectionType),
-                    Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(type.getId())));
+            if (!boltPlayer.hasMode(Mode.NOSPAM)) {
+                BoltComponents.sendMessage(player.get(), Translation.CLICK_LOCKED, plugin.isUseActionBar(),
+                        Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, protectionType),
+                        Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(type.getId())));
+            }
         }
     }
 

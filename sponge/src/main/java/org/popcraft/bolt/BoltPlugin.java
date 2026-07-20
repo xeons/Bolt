@@ -40,17 +40,24 @@ import org.popcraft.bolt.source.SourceResolver;
 import org.popcraft.bolt.source.SourceTypes;
 import org.popcraft.bolt.util.BoltPlayer;
 import org.popcraft.bolt.util.BlockLocation;
+import org.popcraft.bolt.util.Group;
+import org.popcraft.bolt.util.Mode;
 import org.popcraft.bolt.util.ProtectableConfig;
 import org.popcraft.bolt.util.SpongePlayerResolver;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 
@@ -334,6 +341,56 @@ public class BoltPlugin {
 
     public Path getConfigDir() {
         return configDir;
+    }
+
+    public List<String> getPlayersOwnedGroups(final Player player) {
+        final List<String> names = new ArrayList<>();
+        for (final Group group : bolt.getStore().loadGroups().join()) {
+            if (group.getOwner().equals(player.getUniqueId())) {
+                names.add(group.getName());
+            }
+        }
+        return names;
+    }
+
+    /** Persists a player's toggled mode to {@code config/bolt/players/<uuid>.properties}. */
+    public void savePlayerMode(final UUID uuid, final Mode mode, final boolean enabled) {
+        final Path file = configDir.resolve("players").resolve(uuid + ".properties");
+        try {
+            Files.createDirectories(file.getParent());
+            final Properties properties = new Properties();
+            if (Files.exists(file)) {
+                try (BufferedReader reader = Files.newBufferedReader(file)) {
+                    properties.load(reader);
+                }
+            }
+            properties.setProperty(mode.name().toLowerCase(), Boolean.toString(enabled));
+            try (BufferedWriter writer = Files.newBufferedWriter(file)) {
+                properties.store(writer, "Bolt player modes");
+            }
+        } catch (IOException e) {
+            logger.warn("Failed to save player modes: " + e.getMessage());
+        }
+    }
+
+    /** Restores a player's persisted modes onto their {@link BoltPlayer} (called on join). */
+    public void loadPlayerModes(final UUID uuid, final BoltPlayer boltPlayer) {
+        final Path file = configDir.resolve("players").resolve(uuid + ".properties");
+        if (!Files.exists(file)) {
+            return;
+        }
+        final Properties properties = new Properties();
+        try (BufferedReader reader = Files.newBufferedReader(file)) {
+            properties.load(reader);
+        } catch (IOException e) {
+            logger.warn("Failed to load player modes: " + e.getMessage());
+            return;
+        }
+        for (final Mode mode : Mode.values()) {
+            if (Boolean.parseBoolean(properties.getProperty(mode.name().toLowerCase(), "false")) && !boltPlayer.hasMode(mode)) {
+                boltPlayer.toggleMode(mode);
+            }
+        }
     }
 
     public boolean isUseActionBar() {

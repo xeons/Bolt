@@ -5,6 +5,8 @@ import org.popcraft.bolt.lang.Translation;
 import org.popcraft.bolt.protection.EntityProtection;
 import org.popcraft.bolt.protection.Protection;
 import org.popcraft.bolt.util.BoltComponents;
+import org.popcraft.bolt.util.BoltPlayer;
+import org.popcraft.bolt.util.Mode;
 import org.popcraft.bolt.util.Permission;
 import org.popcraft.bolt.util.Placeholder;
 import org.popcraft.bolt.util.ProtectableConfig;
@@ -85,6 +87,10 @@ public class BoltEntityListener {
         if (!player.isPresent()) {
             return;
         }
+        final BoltPlayer boltPlayer = plugin.player(player.get());
+        if (boltPlayer.hasMode(Mode.NOLOCK)) {
+            return;
+        }
         for (final Entity entity : event.getEntities()) {
             final ProtectableConfig config = plugin.getProtectableConfig(entity);
             if (config == null || config.defaultAccess() == null) {
@@ -96,9 +102,11 @@ public class BoltEntityListener {
             final String protectionType = config.defaultAccess().type();
             final EntityProtection protection = plugin.createProtection(entity, player.get().getUniqueId(), protectionType);
             plugin.saveProtection(protection);
-            BoltComponents.sendMessage(player.get(), Translation.CLICK_LOCKED, plugin.isUseActionBar(),
-                    Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, protectionType),
-                    Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(entity.getType().getId())));
+            if (!boltPlayer.hasMode(Mode.NOSPAM)) {
+                BoltComponents.sendMessage(player.get(), Translation.CLICK_LOCKED, plugin.isUseActionBar(),
+                        Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, protectionType),
+                        Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(entity.getType().getId())));
+            }
         }
     }
 }

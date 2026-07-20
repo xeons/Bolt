@@ -1,8 +1,11 @@
 package org.popcraft.bolt.listeners;
 
 import org.popcraft.bolt.BoltPlugin;
+import org.popcraft.bolt.util.BoltPlayer;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.network.ClientConnectionEvent;
+
+import java.util.UUID;
 
 public class BoltPlayerListener {
     private final BoltPlugin plugin;
@@ -13,7 +16,9 @@ public class BoltPlayerListener {
 
     @Listener
     public void onJoin(final ClientConnectionEvent.Join event) {
-        plugin.player(event.getTargetEntity().getUniqueId());
+        final UUID uuid = event.getTargetEntity().getUniqueId();
+        final BoltPlayer boltPlayer = plugin.player(uuid);
+        plugin.loadPlayerModes(uuid, boltPlayer);
     }
 
     @Listener
