@@ -20,6 +20,13 @@ tasks {
     shadowJar {
         // Preserve the JDBC driver's ServiceLoader registration (META-INF/services).
         mergeServiceFiles()
+        // sqlite-jdbc is a multi-release jar containing Java 9+ class files
+        // (META-INF/versions/9/module-info.class, class version 53). SpongeVanilla 7.4 (MC
+        // 1.12.2) scans every .class in a plugin jar with an old ASM that fails on version 53,
+        // which aborts plugin loading at launch. A Java 8 server ignores these entries anyway,
+        // so strip them; the base driver classes (Java 8) remain and work.
+        exclude("META-INF/versions/**")
+        exclude("**/module-info.class")
         minimize {
             exclude(project(":bolt-common"))
             // The SQLite driver is loaded reflectively via ServiceLoader, so minimize must
