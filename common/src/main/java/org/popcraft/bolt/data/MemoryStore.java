@@ -6,8 +6,8 @@ import org.popcraft.bolt.protection.EntityProtection;
 import org.popcraft.bolt.util.BlockLocation;
 import org.popcraft.bolt.util.Group;
 
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -26,7 +26,7 @@ public class MemoryStore implements Store {
 
     @Override
     public CompletableFuture<Collection<BlockProtection>> loadBlockProtections() {
-        return CompletableFuture.completedFuture(List.copyOf(blockProtectionMap.values()));
+        return CompletableFuture.completedFuture(new ArrayList<>(blockProtectionMap.values()));
     }
 
     @Override
@@ -48,7 +48,7 @@ public class MemoryStore implements Store {
 
     @Override
     public CompletableFuture<Collection<EntityProtection>> loadEntityProtections() {
-        return CompletableFuture.completedFuture(List.copyOf(entityProtectionMap.values()));
+        return CompletableFuture.completedFuture(new ArrayList<>(entityProtectionMap.values()));
     }
 
     @Override

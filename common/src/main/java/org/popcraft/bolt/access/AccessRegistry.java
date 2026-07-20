@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public class AccessRegistry {
     private final Map<String, Access> protections = new HashMap<>();
@@ -34,11 +35,11 @@ public class AccessRegistry {
     }
 
     public List<String> protectionTypes() {
-        return protections.keySet().stream().toList();
+        return protections.keySet().stream().collect(Collectors.toList());
     }
 
     public List<String> accessTypes() {
-        return access.keySet().stream().toList();
+        return access.keySet().stream().collect(Collectors.toList());
     }
 
     public Collection<Access> protections() {

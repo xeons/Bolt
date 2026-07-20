@@ -59,6 +59,7 @@ public class Pagination {
                     final Entity entity = plugin.getServer().getEntity(entityProtection.getId());
                     yield entity == null ? null : entity.getLocation();
                 }
+                default -> null;
             };
 
             final Profile profile = Profiles.findProfileByUniqueId(protection.getOwner());

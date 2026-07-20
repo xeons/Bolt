@@ -1,6 +1,7 @@
 package org.popcraft.bolt.lang;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -37,7 +38,7 @@ public final class Translator {
         }
 
         return tryGetProperty(key, locale) != null
-            || tryGetProperty(key, Locale.of(locale.getLanguage())) != null
+            || tryGetProperty(key, new Locale(locale.getLanguage())) != null
             || translation.containsKey(key)
             || fallback.containsKey(key);
     }
@@ -48,20 +49,30 @@ public final class Translator {
         }
 
         return tryGetProperty(key, locale) != null
-                || tryGetProperty(key, Locale.of(locale.getLanguage())) != null
+                || tryGetProperty(key, new Locale(locale.getLanguage())) != null
                 || translation.containsKey(key);
     }
 
     public static String translate(final String key, final Locale locale) {
+        String result;
         if (!perPlayerLocale) {
-            return Objects.requireNonNullElseGet(translation.getProperty(key),
-                () -> Objects.requireNonNullElse(fallback.getProperty(key), key));
+            result = translation.getProperty(key);
+            if (result == null) {
+                result = fallback.getProperty(key);
+            }
+            return result != null ? result : key;
         }
-
-        return Objects.requireNonNullElseGet(tryGetProperty(key, locale),
-            () -> Objects.requireNonNullElseGet(tryGetProperty(key, Locale.of(locale.getLanguage())),
-                () -> Objects.requireNonNullElseGet(translation.getProperty(key),
-                    () -> Objects.requireNonNullElse(fallback.getProperty(key), key))));
+        result = tryGetProperty(key, locale);
+        if (result == null) {
+            result = tryGetProperty(key, new Locale(locale.getLanguage()));
+        }
+        if (result == null) {
+            result = translation.getProperty(key);
+        }
+        if (result == null) {
+            result = fallback.getProperty(key);
+        }
+        return result != null ? result : key;
     }
 
     private static String tryGetProperty(final String key, final Locale locale) {
@@ -136,14 +147,15 @@ public final class Translator {
 
         final long timeNanos = System.nanoTime() - startTimeNanos;
         final double timeMillis = timeNanos / 1e6d;
-        LogManager.getLogManager().getLogger("").info(() -> "Loaded %d localization files in %.3f ms".formatted(languages.size(), timeMillis));
+        LogManager.getLogManager().getLogger("").info(() -> String.format("Loaded %d localization files in %.3f ms", languages.size(), timeMillis));
     }
 
     private static Properties loadTranslation(final String language) {
         final ClassLoader classLoader = Translator.class.getClassLoader();
         final Properties properties = new Properties();
-        final String translationFile = TRANSLATION_FILE_FORMAT.formatted(language);
-        try (final InputStream input = Objects.requireNonNullElseGet(classLoader.getResourceAsStream(translationFile), InputStream::nullInputStream);
+        final String translationFile = String.format(TRANSLATION_FILE_FORMAT, language);
+        final InputStream resource = classLoader.getResourceAsStream(translationFile);
+        try (final InputStream input = resource != null ? resource : new ByteArrayInputStream(new byte[0]);
              final BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
             properties.load(reader);
         } catch (IOException e) {
@@ -167,11 +179,15 @@ public final class Translator {
 
     public static Locale parseLocale(final String string) {
         final String[] segments = string.split("_", 3);
-        return switch (segments.length) {
-            case 1 -> Locale.of(string);
-            case 2 -> Locale.of(segments[0], segments[1]);
-            case 3 -> Locale.of(segments[0], segments[1], segments[2]);
-            default -> Locale.ROOT;
-        };
+        switch (segments.length) {
+            case 1:
+                return new Locale(string);
+            case 2:
+                return new Locale(segments[0], segments[1]);
+            case 3:
+                return new Locale(segments[0], segments[1], segments[2]);
+            default:
+                return Locale.ROOT;
+        }
     }
 }

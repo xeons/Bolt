@@ -25,7 +25,9 @@ subprojects {
     tasks {
         withType<JavaCompile> {
             options.encoding = "UTF-8"
-            options.release = 21
+            // The common engine and the Sponge (SpongeAPI 7.4 / MC 1.12.2) module must run on
+            // Java 8; all other platform modules target 21.
+            options.release = if (project.name == "bolt-common" || project.name == "bolt-sponge") 8 else 21
         }
         jar {
             archiveClassifier.set("noshade")

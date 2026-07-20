@@ -14,7 +14,8 @@ sequenceOf(
     "common",
     "bukkit",
     "paper",
-    "folia"
+    "folia",
+    "sponge"
 ).forEach {
     include("${rootProject.name}-$it")
     project(":${rootProject.name}-$it").projectDir = file(it)

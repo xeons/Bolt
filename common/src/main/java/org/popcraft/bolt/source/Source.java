@@ -51,7 +51,7 @@ public final class Source {
             messageDigest.update(password.getBytes(StandardCharsets.UTF_8));
             final StringBuilder hash = new StringBuilder();
             for (final byte b : messageDigest.digest()) {
-                hash.append("%02x".formatted(b));
+                hash.append(String.format("%02x", b));
             }
             return new Source(SourceTypes.PASSWORD, hash.toString());
         } catch (NoSuchAlgorithmException e) {

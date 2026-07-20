@@ -34,6 +34,7 @@ public class AdminNearbyCommand extends BoltCommand {
                 final Entity entity = plugin.getServer().getEntity(entityProtection.getId());
                 yield entity == null ? null : entity.getLocation();
             }
+            default -> null;
         };
     }
 
