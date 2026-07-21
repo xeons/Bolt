@@ -662,6 +662,65 @@ public final class BoltCommands {
                     return filter(subs, partial);
                 }
                 break;
+            case "admin":
+                if (argIndex == 0) {
+                    final List<String> subs = new ArrayList<>();
+                    for (final String sub : AdminCommands.SUBCOMMANDS) {
+                        if (source.hasPermission("bolt.command.admin." + sub)) {
+                            subs.add(sub);
+                        }
+                    }
+                    return filter(subs, partial);
+                }
+                return suggestAdminArgs(plugin, source, tokens[0].toLowerCase(), afterFirstToken(raw));
+            default:
+                break;
+        }
+        return Collections.emptyList();
+    }
+
+    private static List<String> suggestAdminArgs(final BoltPlugin plugin, final CommandSource source, final String sub, final String raw) {
+        String[] tokens = tokenize(raw);
+        if (tokens.length == 0) {
+            tokens = new String[]{""};
+        }
+        final int argIndex = tokens.length - 1;
+        final String partial = tokens[argIndex];
+        switch (sub) {
+            case "storage":
+                if (argIndex == 0) {
+                    return filter(Arrays.asList("export", "import"), partial);
+                }
+                break;
+            case "expire":
+                if (argIndex == 1) {
+                    return filter(Arrays.asList("seconds", "minutes", "hours", "days"), partial);
+                }
+                break;
+            case "purge":
+            case "find":
+                if (argIndex == 0) {
+                    return filter(onlinePlayerNames(), partial);
+                }
+                break;
+            case "transfer":
+                if (argIndex == 0 || argIndex == 1) {
+                    return filter(onlinePlayerNames(), partial);
+                }
+                break;
+            case "trust":
+                if (argIndex == 0) {
+                    return filter(onlinePlayerNames(), partial);
+                } else if (argIndex == 1) {
+                    return filter(Arrays.asList("add", "remove", "list"), partial);
+                } else if (argIndex == 2) {
+                    return filter(sourceTypeNames(plugin, source), partial);
+                } else if (argIndex == 3 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[2])) {
+                    return filter(onlinePlayerNames(), partial);
+                } else if (argIndex == 4) {
+                    return filter(accessTypeNames(plugin, source), partial);
+                }
+                break;
             default:
                 break;
         }
