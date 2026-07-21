@@ -149,6 +149,17 @@ public class BoltPlugin {
         }
     }
 
+    /**
+     * Null-safe string-list read. Configurate's {@code getList(Object::toString)} throws an NPE on
+     * a virtual (absent) node because it applies the transformer to a null value, so guard first.
+     */
+    private static List<String> stringList(final CommentedConfigurationNode node) {
+        if (node.isVirtual() || node.getValue() == null) {
+            return new ArrayList<>();
+        }
+        return node.getList(Object::toString);
+    }
+
     private void applySettings(final CommentedConfigurationNode root) {
         final CommentedConfigurationNode settings = root.getNode("settings");
         useActionBar = settings.getNode("use-action-bar").getBoolean(false);
@@ -167,7 +178,7 @@ public class BoltPlugin {
 
         // Modes applied to players who haven't explicitly set them (e.g. ["nospam"]).
         defaultModes.clear();
-        final List<String> modeNames = settings.getNode("default-modes").getList(Object::toString);
+        final List<String> modeNames = stringList(settings.getNode("default-modes"));
         for (final String modeName : modeNames) {
             try {
                 defaultModes.add(Mode.valueOf(modeName.toUpperCase()));
@@ -246,7 +257,7 @@ public class BoltPlugin {
             final String type = entry.getKey().toString().toLowerCase();
             final CommentedConfigurationNode node = entry.getValue();
             accessRegistry.registerProtectionType(type, node.getNode("require-permission").getBoolean(false),
-                    new HashSet<>(node.getNode("allows").getList(Object::toString)));
+                    new HashSet<>(stringList(node.getNode("allows"))));
             if (node.getNode("default").getBoolean(false)) {
                 defaultProtectionType = type;
             }
@@ -261,7 +272,7 @@ public class BoltPlugin {
             final String type = entry.getKey().toString().toLowerCase();
             final CommentedConfigurationNode node = entry.getValue();
             accessRegistry.registerAccessType(type, node.getNode("require-permission").getBoolean(false),
-                    new HashSet<>(node.getNode("allows").getList(Object::toString)));
+                    new HashSet<>(stringList(node.getNode("allows"))));
             if (node.getNode("default").getBoolean(false)) {
                 defaultAccessType = type;
             }
