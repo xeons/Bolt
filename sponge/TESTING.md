@@ -1,4 +1,4 @@
-# Bolt (Sponge 7.4) — Runtime Test Checklist
+# Bolt (Sponge 7.4) - Runtime Test Checklist
 
 The Sponge port is **compile-verified only**; nothing below has been run on a live server. This
 list validates it against a real **SpongeVanilla 7.4** server (Minecraft 1.12.2, Java 8).
@@ -8,21 +8,21 @@ list validates it against a real **SpongeVanilla 7.4** server (Minecraft 1.12.2,
 - [ ] SpongeVanilla 7.4 server (MC 1.12.2) running on **Java 8**; `Bolt-1.2.0.jar` in `mods/`.
 - [ ] Two accounts: **OWNER** and **OTHER**. Test OTHER as a **non-op, survival** player
       (op/creative bypass protection via `bolt.admin`, so a non-op is the real test).
-- [ ] Do interaction tests **away from world spawn** — vanilla spawn protection can mask/deny
+- [ ] Do interaction tests **away from world spawn** - vanilla spawn protection can mask/deny
       interactions and make it look like a Bolt bug.
 - [ ] Default storage is SQLite. To also test the in-memory path, set `database.type = none`.
 
 ### 0. Load & config
 - [ ] Server starts with no crash; Bolt is listed; **check the log for a hard failure at plugin
-      scan** (the multi-release strip fixed this — regression check).
+      scan** (the multi-release strip fixed this - regression check).
 - [ ] `config/bolt/bolt.conf` is generated with `settings` / `database` / `protections` / `access`
       / `sources` / `blocks` / `entities` sections.
 - [ ] `config/bolt/lang/` is populated (en.properties etc.).
-- [ ] **Startup log has no `Unknown block/entity in config, skipping: …` warnings** — if it does,
+- [ ] **Startup log has no `Unknown block/entity in config, skipping: …` warnings** - if it does,
       those 1.12.2 catalog ids need correcting.
 - [ ] `/bolt` lists subcommands; `/bolt help` and `/bolt help lock` print help text.
 - [ ] **Messages render** (not blank). If everything is silent, the `BoltComponents` Text bridge
-      is broken (was previously a false alarm caused by spawn protection — retest away from spawn).
+      is broken (was previously a false alarm caused by spawn protection - retest away from spawn).
 
 ---
 
@@ -155,7 +155,7 @@ display type is openable but grants neither deposit nor withdraw. As OTHER:
 
 ---
 
-## Priority order (test these first — most likely to break)
+## Priority order (test these first - most likely to break)
 
 1. **§0** load + messages render + no config-id warnings.
 2. **§6** hopper does not drain a private chest (whole inventory path hinges on this event firing).
@@ -164,5 +164,5 @@ display type is openable but grants neither deposit nor withdraw. As OTHER:
 5. **§9** entity auto-protect + interact.
 6. **§16** SQLite survives a restart.
 
-When something fails, grab `logs/latest.log` (and `crash-reports/` if it crashed) — Sponge sends
+When something fails, grab `logs/latest.log` (and `crash-reports/` if it crashed) - Sponge sends
 most errors there, not to chat.

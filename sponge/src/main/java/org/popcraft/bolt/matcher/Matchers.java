@@ -16,7 +16,7 @@ import java.util.Set;
 /**
  * Expands a block into the set of other blocks that share a single protection with it. On
  * SpongeAPI 7.4 (Minecraft 1.12.2) there is no Bukkit-style {@code BlockData} API and chests have
- * no left/right connection trait — a double chest is simply two horizontally-adjacent chests of
+ * no left/right connection trait - a double chest is simply two horizontally-adjacent chests of
  * the same type. Detection therefore reads block types (reliable even mid-break, unlike the tile
  * entity's {@code getConnectedChests()}), and doors use the {@link Keys#PORTION_TYPE} trait.
  *
@@ -34,8 +34,8 @@ public final class Matchers {
     }
 
     /**
-     * The location of a chest's double-chest partner — a horizontally-adjacent chest of the same
-     * type — or empty if none. The type is supplied explicitly so a caller breaking a block can
+     * The location of a chest's double-chest partner - a horizontally-adjacent chest of the same
+     * type - or empty if none. The type is supplied explicitly so a caller breaking a block can
      * pass the block's pre-break type, since the live world may already read as air mid-break. In
      * 1.12.2 the game prevents triple chests, so there is at most one partner.
      */

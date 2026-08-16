@@ -34,7 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * {@code /bolt admin <sub>} — moderation/maintenance commands, mirroring the Bukkit
+ * {@code /bolt admin <sub>} - moderation/maintenance commands, mirroring the Bukkit
  * implementation. Each subcommand is gated on {@code bolt.command.admin.<sub>}. Migration/convert
  * tooling is intentionally omitted; {@code report} is a reduced version (the Bukkit hit/miss
  * profiler is bStats-backed and not part of this port).

@@ -27,7 +27,7 @@ import java.util.Optional;
 /**
  * Protects container contents from automation and inventory interactions. In particular
  * {@link ChangeInventoryEvent.Transfer.Pre} covers hoppers/droppers/hopper-minecarts pulling from
- * or pushing into a protected container — the "hopper emptying a locked chest" case. Mirrors the
+ * or pushing into a protected container - the "hopper emptying a locked chest" case. Mirrors the
  * core of Bukkit's InventoryListener (onInventoryMoveItem + onInventoryOpen).
  */
 public final class BoltInventoryListener {

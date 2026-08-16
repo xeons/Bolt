@@ -49,7 +49,7 @@ public final class BoltCommands {
     private BoltCommands() {
     }
 
-    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "edit", "modify", "group", "mode", "password", "help", "admin"};
+    private static final String[] SUBCOMMANDS = {"lock", "unlock", "info", "trust", "edit", "modify", "group", "mode", "password", "transfer", "help", "admin"};
 
     private interface Handler {
         void handle(BoltPlugin plugin, CommandSource source, Arguments arguments);
@@ -111,6 +111,9 @@ public final class BoltCommands {
             case "password":
                 password(plugin, source, arguments);
                 break;
+            case "transfer":
+                transfer(plugin, source, arguments);
+                break;
             case "admin":
                 AdminCommands.handle(plugin, source, arguments);
                 break;
@@ -168,7 +171,7 @@ public final class BoltCommands {
     }
 
     /**
-     * {@code /bolt trust [add|remove <sourceType> <identifier> [accessType]]} — edits the sender's
+     * {@code /bolt trust [add|remove <sourceType> <identifier> [accessType]]} - edits the sender's
      * global access list (applies to all of their protections). With no add/remove, lists the
      * sender's access list. Matches Bukkit's TrustCommand.
      */
@@ -193,7 +196,7 @@ public final class BoltCommands {
     }
 
     /**
-     * {@code /bolt edit <add|remove> <player>} — click-based; grants/revokes a player on the next
+     * {@code /bolt edit <add|remove> <player>} - click-based; grants/revokes a player on the next
      * protection clicked (default access type). Matches Bukkit's EditCommand.
      */
     private static void edit(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
@@ -223,7 +226,7 @@ public final class BoltCommands {
     }
 
     /**
-     * {@code /bolt modify <add|remove> <accessType> <sourceType> <identifier...>} — click-based;
+     * {@code /bolt modify <add|remove> <accessType> <sourceType> <identifier...>} - click-based;
      * stages one or more source→access modifications applied to the next protection clicked.
      * Matches Bukkit's ModifyCommand.
      */
@@ -346,7 +349,7 @@ public final class BoltCommands {
     }
 
     /**
-     * {@code /bolt password <password>} — registers a password on the player's session so they can
+     * {@code /bolt password <password>} - registers a password on the player's session so they can
      * access password-protected protections until they disconnect.
      */
     private static void password(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
@@ -363,7 +366,32 @@ public final class BoltCommands {
         }
     }
 
-    /** {@code /bolt mode <persist|nolock|nospam>} — toggles a per-player mode (persisted). */
+    /**
+     * {@code /bolt transfer <player>} - click-based; transfers the next protection the sender clicks
+     * (which they must own) to another player. Matches Bukkit's TransferCommand.
+     */
+    private static void transfer(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
+        if (!(source instanceof Player)) {
+            BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
+            return;
+        }
+        final Player player = (Player) source;
+        final String target = arguments.next();
+        if (target == null) {
+            BoltComponents.sendMessage(source, Translation.HELP_COMMAND_SHORT_TRANSFER,
+                    Placeholder.of(Translation.Placeholder.COMMAND, "/bolt transfer"));
+            return;
+        }
+        final UUID uuid = resolvePlayer(target);
+        if (uuid == null) {
+            BoltComponents.sendMessage(source, Translation.PLAYER_NOT_FOUND, Placeholder.of(Translation.Placeholder.PLAYER, target));
+            return;
+        }
+        plugin.player(player).setAction(new Action(Action.Type.TRANSFER, "bolt.command.transfer", uuid.toString()));
+        BoltComponents.sendMessage(player, Translation.CLICK_TRANSFER, plugin.isUseActionBar());
+    }
+
+    /** {@code /bolt mode <persist|nolock|nospam>} - toggles a per-player mode (persisted). */
     private static void mode(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
         if (!(source instanceof Player)) {
             BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
@@ -390,7 +418,7 @@ public final class BoltCommands {
         plugin.savePlayerMode(player.getUniqueId(), mode, hasMode);
     }
 
-    /** {@code /bolt group <create|delete|add|remove|list> <group> [players...]} — manage player groups. */
+    /** {@code /bolt group <create|delete|add|remove|list> <group> [players...]} - manage player groups. */
     private static void group(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
         if (!(source instanceof Player)) {
             BoltComponents.sendMessage(source, Translation.COMMAND_PLAYER_ONLY);
@@ -489,7 +517,7 @@ public final class BoltCommands {
                 Placeholder.of(Translation.Placeholder.LITERAL, "(create|delete|add|remove|list)"));
     }
 
-    /** {@code /bolt help [command]} — shows general help or a specific command's help. */
+    /** {@code /bolt help [command]} - shows general help or a specific command's help. */
     private static void help(final BoltPlugin plugin, final CommandSource source, final Arguments arguments) {
         final String command = arguments.next();
         if (command == null) {
@@ -609,8 +637,8 @@ public final class BoltCommands {
                     return filter(Arrays.asList("add", "remove", "list"), partial);
                 } else if (argIndex == 1) {
                     return filter(sourceTypeNames(plugin, source), partial);
-                } else if (argIndex == 2 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[1])) {
-                    return filter(onlinePlayerNames(), partial);
+                } else if (argIndex == 2) {
+                    return filter(sourceIdentifierNames(plugin, source, tokens[1]), partial);
                 } else if (argIndex == 3) {
                     return filter(accessTypeNames(plugin, source), partial);
                 }
@@ -619,7 +647,7 @@ public final class BoltCommands {
                 if (argIndex == 0) {
                     return filter(Arrays.asList("add", "remove"), partial);
                 } else if (argIndex == 1) {
-                    return filter(onlinePlayerNames(), partial);
+                    return filter(playerNames(), partial);
                 }
                 break;
             case "modify":
@@ -629,8 +657,8 @@ public final class BoltCommands {
                     return filter(accessTypeNames(plugin, source), partial);
                 } else if (argIndex == 2) {
                     return filter(sourceTypeNames(plugin, source), partial);
-                } else if (argIndex >= 3 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[2])) {
-                    return filter(onlinePlayerNames(), partial);
+                } else if (argIndex >= 3) {
+                    return filter(sourceIdentifierNames(plugin, source, tokens[2]), partial);
                 }
                 break;
             case "mode":
@@ -642,13 +670,18 @@ public final class BoltCommands {
                     return filter(modes, partial);
                 }
                 break;
+            case "transfer":
+                if (argIndex == 0) {
+                    return filter(playerNames(), partial);
+                }
+                break;
             case "group":
                 if (argIndex == 0) {
                     return filter(Arrays.asList("create", "delete", "add", "remove", "list"), partial);
                 } else if (argIndex == 1 && source instanceof Player) {
                     return filter(plugin.getPlayersOwnedGroups((Player) source), partial);
                 } else if (argIndex >= 2) {
-                    return filter(onlinePlayerNames(), partial);
+                    return filter(playerNames(), partial);
                 }
                 break;
             case "help":
@@ -656,6 +689,14 @@ public final class BoltCommands {
                     final List<String> subs = new ArrayList<>();
                     for (final String sub : SUBCOMMANDS) {
                         if (source.hasPermission("bolt.command." + sub)) {
+                            subs.add(sub);
+                        }
+                    }
+                    return filter(subs, partial);
+                } else if (argIndex == 1 && "admin".equalsIgnoreCase(tokens[0])) {
+                    final List<String> subs = new ArrayList<>();
+                    for (final String sub : AdminCommands.SUBCOMMANDS) {
+                        if (source.hasPermission("bolt.command.admin." + sub)) {
                             subs.add(sub);
                         }
                     }
@@ -700,23 +741,23 @@ public final class BoltCommands {
             case "purge":
             case "find":
                 if (argIndex == 0) {
-                    return filter(onlinePlayerNames(), partial);
+                    return filter(playerNames(), partial);
                 }
                 break;
             case "transfer":
                 if (argIndex == 0 || argIndex == 1) {
-                    return filter(onlinePlayerNames(), partial);
+                    return filter(playerNames(), partial);
                 }
                 break;
             case "trust":
                 if (argIndex == 0) {
-                    return filter(onlinePlayerNames(), partial);
+                    return filter(playerNames(), partial);
                 } else if (argIndex == 1) {
                     return filter(Arrays.asList("add", "remove", "list"), partial);
                 } else if (argIndex == 2) {
                     return filter(sourceTypeNames(plugin, source), partial);
-                } else if (argIndex == 3 && SourceTypes.PLAYER.equalsIgnoreCase(tokens[2])) {
-                    return filter(onlinePlayerNames(), partial);
+                } else if (argIndex == 3) {
+                    return filter(sourceIdentifierNames(plugin, source, tokens[2]), partial);
                 } else if (argIndex == 4) {
                     return filter(accessTypeNames(plugin, source), partial);
                 }
@@ -797,7 +838,28 @@ public final class BoltCommands {
         return names;
     }
 
-    private static List<String> onlinePlayerNames() {
+    /**
+     * Completions for a source's identifier argument, mirroring Bukkit's per-source-type
+     * {@code SourceTransformer.completions}: {@code player} → online players, {@code group} → the
+     * sender's owned groups, everything else → nothing.
+     */
+    private static List<String> sourceIdentifierNames(final BoltPlugin plugin, final CommandSource source, final String sourceType) {
+        if (SourceTypes.PLAYER.equalsIgnoreCase(sourceType)) {
+            return playerNames();
+        }
+        if (SourceTypes.GROUP.equalsIgnoreCase(sourceType) && source instanceof Player) {
+            return plugin.getPlayersOwnedGroups((Player) source);
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * Player-name completions: online players only, matching the Bukkit build. Enumerating offline
+     * players (via {@code UserStorageService.getAll()}) was deliberately avoided - that call rebuilds
+     * a map of every stored profile on each request, on the main thread, which does not scale to
+     * servers with a large playerdata history.
+     */
+    private static List<String> playerNames() {
         final List<String> names = new ArrayList<>();
         for (final Player player : Sponge.getServer().getOnlinePlayers()) {
             names.add(player.getName());

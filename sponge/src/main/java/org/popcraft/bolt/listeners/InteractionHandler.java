@@ -7,6 +7,7 @@ import org.popcraft.bolt.protection.Protection;
 import org.popcraft.bolt.util.Action;
 import org.popcraft.bolt.util.BoltComponents;
 import org.popcraft.bolt.util.BoltPlayer;
+import org.popcraft.bolt.util.Mode;
 import org.popcraft.bolt.util.Permission;
 import org.popcraft.bolt.util.Placeholder;
 import org.popcraft.bolt.util.ProtectableConfig;
@@ -25,7 +26,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Consumes a {@link BoltPlayer}'s pending {@link Action} when they click a block or entity —
+ * Consumes a {@link BoltPlayer}'s pending {@link Action} when they click a block or entity -
  * the heart of Bolt's lock/unlock/info/trust UX. Ported from the Bukkit
  * {@code InteractionListener}, trimmed to the MVP action set (LOCK/UNLOCK/INFO/EDIT) and with
  * the addon event bus omitted.
@@ -217,6 +218,37 @@ public class InteractionHandler {
 
     private void handleDebug(final Player player, final Protection protection) {
         player.sendMessage(Text.of(protection == null ? "No protection here." : protection.toString()));
+    }
+
+    /**
+     * Notifies a player holding {@code bolt.protection.notify} who owns a protection they interact
+     * with, in place of the usual "locked" denial. Suppressed by NOSPAM mode; for the player's own
+     * protections it additionally requires {@code bolt.protection.notify.self}. Mirrors the notify
+     * branch of Bukkit's Block/Entity interaction listeners. Runs synchronously (on the server
+     * thread) using a cache-only owner-name lookup - an unknown owner falls back to the generic
+     * message rather than blocking on a Mojang request.
+     */
+    public void notifyProtection(final Player player, final Protection protection) {
+        if (plugin.player(player).hasMode(Mode.NOSPAM)) {
+            return;
+        }
+        final boolean isYou = player.getUniqueId().equals(protection.getOwner());
+        if (isYou && !player.hasPermission("bolt.protection.notify.self")) {
+            return;
+        }
+        final String owner = isYou
+                ? BoltComponents.translateRaw(Translation.YOU, player)
+                : ownerName(protection.getOwner());
+        if (owner == null) {
+            BoltComponents.sendMessage(player, Translation.PROTECTION_NOTIFY_GENERIC, plugin.isUseActionBar(),
+                    Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, Protections.protectionType(protection)),
+                    Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)));
+        } else {
+            BoltComponents.sendMessage(player, Translation.PROTECTION_NOTIFY, plugin.isUseActionBar(),
+                    Placeholder.of(Translation.Placeholder.PROTECTION_TYPE, Protections.protectionType(protection)),
+                    Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)),
+                    Placeholder.of(Translation.Placeholder.PLAYER, owner));
+        }
     }
 
     private String ownerName(final UUID owner) {

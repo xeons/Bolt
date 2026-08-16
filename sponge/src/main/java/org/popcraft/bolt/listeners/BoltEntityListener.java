@@ -11,12 +11,14 @@ import org.popcraft.bolt.util.Permission;
 import org.popcraft.bolt.util.Placeholder;
 import org.popcraft.bolt.util.ProtectableConfig;
 import org.popcraft.bolt.util.Protections;
+import org.popcraft.bolt.util.SchedulerUtil;
 import org.spongepowered.api.entity.Entity;
 import org.spongepowered.api.entity.living.player.Player;
 import org.spongepowered.api.event.Listener;
 import org.spongepowered.api.event.entity.DamageEntityEvent;
 import org.spongepowered.api.event.entity.DestructEntityEvent;
 import org.spongepowered.api.event.entity.InteractEntityEvent;
+import org.spongepowered.api.event.entity.RideEntityEvent;
 import org.spongepowered.api.event.entity.SpawnEntityEvent;
 import org.spongepowered.api.event.filter.cause.First;
 
@@ -52,7 +54,32 @@ public class BoltEntityListener {
         if (protection == null) {
             return;
         }
+        final BoltPlayer boltPlayer = plugin.player(player);
+        // Both hands can fire this event in the same tick; only act on the first to avoid double
+        // messages (the block listener relies on a main-hand filter for the same reason).
+        final boolean firstInteraction = !boltPlayer.hasInteracted();
+        final boolean hasNotify = player.hasPermission("bolt.protection.notify");
         if (!plugin.canAccess(protection, player, Permission.INTERACT)) {
+            event.setCancelled(true);
+            if (firstInteraction && !hasNotify) {
+                BoltComponents.sendMessage(player, Translation.LOCKED, plugin.isUseActionBar(),
+                        Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)));
+            }
+        }
+        if (firstInteraction && hasNotify) {
+            interactionHandler.notifyProtection(player, protection);
+        }
+        if (firstInteraction) {
+            boltPlayer.setInteracted();
+            SchedulerUtil.schedule(plugin, boltPlayer::clearInteraction);
+        }
+    }
+
+    @Listener
+    public void onRideEntity(final RideEntityEvent.Mount event, @First final Player player) {
+        // Mounting a protected vehicle (boat / minecart) - mirrors Bukkit's onVehicleEnter/onEntityMount.
+        final Protection protection = plugin.findProtection(event.getTargetEntity());
+        if (protection != null && !plugin.canAccess(protection, player, Permission.MOUNT)) {
             event.setCancelled(true);
             BoltComponents.sendMessage(player, Translation.LOCKED, plugin.isUseActionBar(),
                     Placeholder.of(Translation.Placeholder.PROTECTION, Protections.displayType(protection)));
